@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '22';
+const APP_VERSION = '23';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -133,6 +133,14 @@ async function loginWith(code, who) {
   const h = await sha256(code);
   const hasLocal = !!S.profile || Object.keys(S.days || {}).length > 0 || (S.meals || []).length > 0;
   if (hasLocal && S.linkedHash && S.linkedHash !== h) { const k = S.apiKey; S = freshState(); S.apiKey = k; }
+  // Nouvel appareil (jamais connecté) alors que le compte existe déjà en ligne : on prend le compte en ligne tel quel,
+  // sans y mélanger ce qui a été tapé ici pour essayer (ex. le questionnaire refait sur l'ordi).
+  else if (hasLocal && !S.linkedHash) {
+    try {
+      const r = await fetch(`${RELAY_URL}/data`, { headers: { 'X-Kalo-Code': code }, cache: 'no-store' });
+      if (r.ok && (await r.json()).doc?.profile) { const k = S.apiKey; S = freshState(); S.apiKey = k; }
+    } catch {}
+  }
   if (!S.profile) { S.days = {}; S.foods = {}; S.meals = []; S.tomb = {}; }
   S.garminCode = code; S.who = who || S.who || ''; S.garminAuto = S.garminAuto !== false; S.syncOnce = false;
   lastSnap = snapOf(S); rawSave();
