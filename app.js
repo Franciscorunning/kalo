@@ -1783,9 +1783,15 @@ function renderProfile(app) {
 }
 
 /* ====================== Démarrage ====================== */
-if (S.profile && S.garminCode && S.startDate === undefined) {
-  const n = applyStartDate('2026-10-10');
-  setTimeout(() => toast(`Historique démarré au 10 oct. 2026 (${n} jours plus anciens effacés)`), 1200);
+// Seulement sur le téléphone de Francisco : on reconnaît son code Garmin par son empreinte (le code lui-même n'est pas ici).
+const FRANCISCO_CODE_SHA = 'dbd8131f9e1f39a720410071cad5e12a0a8f2125235582d632e05eb514e862bc';
+if (S.profile && S.garminCode && S.startDate === undefined && crypto.subtle) {
+  crypto.subtle.digest('SHA-256', new TextEncoder().encode(S.garminCode)).then(buf => {
+    const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+    if (hex !== FRANCISCO_CODE_SHA || S.startDate !== undefined) return;
+    const n = applyStartDate('2026-10-10'); render();
+    toast(`Historique démarré au 10 oct. 2026 (${n} jours plus anciens effacés)`);
+  }).catch(() => {});
 }
 if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
