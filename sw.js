@@ -1,5 +1,5 @@
 // Garde l'app disponible même sans réseau (les écrans, pas les recherches).
-const CACHE = 'kalo-v14';
+const CACHE = 'kalo-v15';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'aliments.json', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

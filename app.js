@@ -520,6 +520,13 @@ function openCopy(k, mealId) {
     };
   });
 }
+/* ---------- Début de l'historique ---------- */
+function applyStartDate(start) {
+  let n = 0;
+  for (const k of Object.keys(S.days)) if (k < start) { delete S.days[k]; n++; }
+  S.startDate = start; save();
+  return n;
+}
 /* ---------- Garmin (via le relais privé Cloudflare) ---------- */
 function agoText(t) {
   const m = Math.round((Date.now() - t) / 60000);
@@ -539,7 +546,7 @@ async function garminSync(silent, days) {
     const data = await r.json();
     let changed = 0;
     for (const [k, v] of Object.entries(data.days || {})) {
-      if (k > todayKey()) continue;
+      if (k > todayKey() || (S.startDate && k < S.startDate)) continue;
       const d = day(k);
       if (v.weight != null && d.weight !== v.weight) { d.weight = v.weight; changed++; }
       if (v.steps != null && d.steps !== v.steps) { d.steps = v.steps; changed++; }
@@ -1608,6 +1615,12 @@ function renderProfile(app) {
       </div>
     </div>
     <div class="card">
+      <h3>📅 Début de l'historique</h3>
+      <p class="muted small" style="margin-top:0">${S.startDate ? `Kalo commence le <b>${shortDate(S.startDate)}</b> : rien d'avant n'est gardé (ni Garmin, ni import).` : 'Kalo garde tout l\'historique.'}</p>
+      <label class="field"><span>Nouvelle date de début</span><input class="input" type="date" id="sd-date" value="${S.startDate || ''}" max="${todayKey()}"></label>
+      <button class="btn ghost" id="sd-go">Appliquer cette date</button>
+    </div>
+    <div class="card">
       <h3>⌚ Garmin</h3>
       ${S.garminCode
         ? `<div class="key-ok">✓ Relié à Garmin${S.garminLast ? '<br><span>Dernière récupération ' + agoText(S.garminLast) + '</span>' : ''}</div>
@@ -1707,6 +1720,13 @@ function renderProfile(app) {
       out.innerHTML = `<span style="color:var(--bad);font-weight:650">${esc(aiErrorText(e))}</span><br><span class="err-detail" style="display:inline-block;margin-top:6px">${esc([e.status, e.error?.error?.message || e.message].filter(Boolean).join(' · ')).slice(0, 300)}</span>`;
     } finally { b.disabled = false; }
   };
+  $('#sd-go').onclick = () => {
+    const v = $('#sd-date').value;
+    if (!v) return toast('Choisis une date');
+    const before = Object.keys(S.days).filter(k => k < v).length;
+    if (before && !confirm(`Effacer de ce téléphone les ${before} jours avant le ${shortDate(v)} ? C'est définitif (pense à faire une copie avant si besoin).`)) return;
+    const n = applyStartDate(v); render(); toast(n ? `${n} jours effacés · début le ${shortDate(v)}` : `Début le ${shortDate(v)}`);
+  };
   if ($('#g-save')) $('#g-save').onclick = async () => {
     const c = $('#g-code').value.replace(/\s+/g, '');
     if (c.length < 16) return toast('Colle le code complet');
@@ -1736,6 +1756,7 @@ function renderProfile(app) {
       $('#imp-no', sh).onclick = closeSheet;
       $('#imp-go', sh).onclick = () => {
         for (const r of rows) {
+          if (S.startDate && r.date < S.startDate) continue;
           const d = day(r.date);
           if (r.weight != null) d.weight = r.weight;
           if (r.steps != null) d.steps = r.steps;
@@ -1762,6 +1783,10 @@ function renderProfile(app) {
 }
 
 /* ====================== Démarrage ====================== */
+if (S.profile && S.garminCode && S.startDate === undefined) {
+  const n = applyStartDate('2026-10-10');
+  setTimeout(() => toast(`Historique démarré au 10 oct. 2026 (${n} jours plus anciens effacés)`), 1200);
+}
 if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
 const garminAuto = () => { if (S.garminCode && S.garminAuto !== false && ((S.garminV || 0) < 2 || Date.now() - (S.garminLast || 0) > 30 * 60e3)) garminSync(true); };
