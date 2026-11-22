@@ -1,7 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
-const QR_URL = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
 const MODEL = 'claude-opus-5-5';
 const STORE = 'kalo-v1';
 
@@ -81,9 +80,12 @@ const fmt = (n, dec = 0) => (n == null || isNaN(n)) ? '–' : Number(n).toLocale
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
 let toastT;
-function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.hidden = false;
-  clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 2600);
+function toast(msg, action, onAction) {
+  const t = $('#toast');
+  t.innerHTML = esc(msg) + (action ? ` <button id="toast-act">${esc(action)}</button>` : '');
+  t.hidden = false;
+  if (action) $('#toast-act').onclick = () => { t.hidden = true; onAction(); };
+  clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), action ? 5000 : 2600);
 }
 const ICON = {
   left: '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
@@ -247,11 +249,11 @@ function renderDay(app) {
       return `<div class="meal">
         <div class="meal-head"><div><span class="t">${m.emoji} ${m.name}</span>${es.length ? `<span class="k num">${fmt(mt.kcal)} kcal</span>` : ''}</div>
           <button class="addmini" data-addmeal="${m.id}" aria-label="Ajouter à ${m.name}">${ICON.plus}</button></div>
-        ${es.length ? es.map(e => `<button class="entry" data-entry="${e.id}">
+        ${es.length ? es.map(e => `<div class="swipe" data-swipe="${e.id}"><button class="swipe-del" data-del="${e.id}">Supprimer</button><button class="entry" data-entry="${e.id}">
             <span class="thumb">${e.img ? `<img class="thumb" src="${e.img}" alt="">` : srcEmoji(e.source)}</span>
             <span class="info"><span class="n">${esc(e.name)}</span>
               <span class="m num">${e.grams ? fmt(e.grams) + ' g · ' : ''}<span><i class="dot" style="background:var(--prot)"></i>${fmt(e.p)}</span><span><i class="dot" style="background:var(--carb)"></i>${fmt(e.c)}</span><span><i class="dot" style="background:var(--fat)"></i>${fmt(e.f)}</span></span></span>
-            <span class="kc num">${fmt(e.kcal)}</span></button>`).join('') : ''}
+            <span class="kc num">${fmt(e.kcal)}</span></button></div>`).join('') : ''}
       </div>`;
     }).join('')}
     ${!d.entries.length ? '<p class="center muted small">Appuie sur le bouton <b>+</b> en bas pour ajouter un repas.</p>' : ''}
@@ -269,7 +271,14 @@ function renderDay(app) {
   $('#q-weight').onclick = () => openBody('weight');
   $('#q-steps').onclick = () => openBody('steps');
   $$('[data-addmeal]', app).forEach(b => b.onclick = () => openAdd(b.dataset.addmeal));
-  $$('[data-entry]', app).forEach(b => b.onclick = () => openEntry(b.dataset.entry));
+  $$('[data-entry]', app).forEach(b => b.onclick = () => {
+    const w = b.parentElement;
+    if (b.dataset.swiped) return;
+    if (w.classList.contains('open')) { w.classList.remove('open'); b.style.transform = ''; return; }
+    openEntry(b.dataset.entry);
+  });
+  $$('[data-del]', app).forEach(b => b.onclick = () => deleteEntry(k, b.dataset.del));
+  $$('[data-swipe]', app).forEach(w => bindSwipe(w, () => deleteEntry(k, w.dataset.swipe)));
 }
 // Rappel de sauvegarde : dès 3 jours notés, puis toutes les semaines.
 function backupDue() {
@@ -292,6 +301,41 @@ async function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   toast('Copie téléchargée ✓');
 }
+function deleteEntry(k, id) {
+  const d = S.days[k]; if (!d) return;
+  const i = d.entries.findIndex(x => x.id === id); if (i < 0) return;
+  const [gone] = d.entries.splice(i, 1);
+  cleanDay(k); save(); render();
+  toast('« ' + (gone.name.length > 22 ? gone.name.slice(0, 22) + '…' : gone.name) + ' » supprimé', 'Annuler', () => {
+    day(k).entries.splice(i, 0, gone); save(); render();
+  });
+}
+// Glisser une ligne vers la gauche : un peu = bouton Supprimer, jusqu'au bout = supprimé.
+function bindSwipe(wrap, onDelete) {
+  const row = wrap.querySelector('.entry');
+  let x0 = 0, y0 = 0, dx = 0, mode = null, base = 0;
+  wrap.addEventListener('touchstart', e => {
+    const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; mode = null;
+    base = wrap.classList.contains('open') ? -96 : 0; row.style.transition = 'none';
+  }, { passive: true });
+  wrap.addEventListener('touchmove', e => {
+    const t = e.touches[0], mx = t.clientX - x0, my = t.clientY - y0;
+    if (!mode && (Math.abs(mx) > 8 || Math.abs(my) > 8)) mode = Math.abs(mx) > Math.abs(my) ? 'h' : 'v';
+    if (mode !== 'h') return;
+    e.preventDefault();
+    dx = Math.min(0, base + mx);
+    row.style.transform = `translateX(${dx}px)`;
+    wrap.classList.toggle('arm', dx < -wrap.offsetWidth * 0.45);
+  }, { passive: false });
+  wrap.addEventListener('touchend', () => {
+    row.style.transition = '';
+    if (mode !== 'h') return;
+    row.dataset.swiped = '1'; setTimeout(() => delete row.dataset.swiped, 350);
+    if (dx < -wrap.offsetWidth * 0.45) { row.style.transform = 'translateX(-100%)'; setTimeout(onDelete, 180); }
+    else if (dx < -50) { row.style.transform = 'translateX(-96px)'; wrap.classList.add('open'); }
+    else { row.style.transform = ''; wrap.classList.remove('open', 'arm'); }
+  });
+}
 const srcEmoji = s => ({ photo: '📷', barcode: '🏷️', ai: '✨', manual: '✏️', search: '🔎' }[s] || '🍴');
 
 /* ====================== Feuilles ====================== */
@@ -299,11 +343,36 @@ let sheetCleanup = null;
 function openSheet(html, mount) {
   closeSheet();
   const root = $('#sheet-root');
-  root.innerHTML = `<div class="backdrop"></div><div class="sheet" role="dialog"><div class="grab"></div>${html}</div>`;
+  root.innerHTML = `<div class="backdrop"></div><div class="sheet" role="dialog"><div class="sheet-top"><div class="grab"></div>
+    <button class="sheet-x" aria-label="Fermer"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>${html}</div>`;
   $('.backdrop', root).onclick = closeSheet;
   const sh = $('.sheet', root);
+  $('.sheet-x', sh).onclick = closeSheet;
+  bindSheetDrag(sh);
   sheetCleanup = mount ? mount(sh) : null;
   return sh;
+}
+// Tirer la fenêtre vers le bas pour la fermer (quand on est tout en haut de la fenêtre).
+function bindSheetDrag(sh) {
+  let y0 = 0, x0 = 0, dy = 0, mode = null, top = true;
+  sh.addEventListener('touchstart', e => {
+    const t = e.touches[0]; y0 = t.clientY; x0 = t.clientX; dy = 0; mode = null;
+    top = sh.scrollTop <= 0 || !!e.target.closest('.sheet-top');
+  }, { passive: true });
+  sh.addEventListener('touchmove', e => {
+    const t = e.touches[0], my = t.clientY - y0, mx = t.clientX - x0;
+    if (!mode && (Math.abs(mx) > 8 || Math.abs(my) > 8)) mode = (Math.abs(my) > Math.abs(mx) && my > 0 && top) ? 'drag' : 'none';
+    if (mode !== 'drag') return;
+    e.preventDefault();
+    dy = Math.max(0, my);
+    sh.style.transition = 'none'; sh.style.transform = `translateY(${dy}px)`;
+  }, { passive: false });
+  sh.addEventListener('touchend', () => {
+    if (mode !== 'drag') return;
+    sh.style.transition = 'transform .2s ease';
+    if (dy > 110) { sh.style.transform = 'translateY(100%)'; setTimeout(closeSheet, 180); }
+    else sh.style.transform = '';
+  });
 }
 function closeSheet() {
   if (typeof sheetCleanup === 'function') { try { sheetCleanup(); } catch {} }
@@ -603,12 +672,6 @@ function openManual(name = '') {
 }
 
 /* ====================== Code-barres ====================== */
-function loadScript(src) {
-  return new Promise((ok, ko) => {
-    if ([...document.scripts].some(s => s.src === src)) return ok();
-    const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s);
-  });
-}
 // Vérifie le chiffre de contrôle du code-barres : évite les fausses lectures.
 function validEAN(c) {
   if (![8, 12, 13].includes(c.length)) return false;
@@ -616,51 +679,105 @@ function validEAN(c) {
   const sum = d.reduce((a, n, i) => a + n * (i % 2 ? 3 : 1), 0);
   return (10 - (sum % 10)) % 10 === chk;
 }
+// Lecteur : celui du téléphone s'il sait lire les codes-barres (Android), sinon le moteur ZXing (iPhone).
+const BD_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@3.2.3/dist/es/ponyfill.js/+esm';
+const BC_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+let detectorPromise = null;
+function getDetector() {
+  return (detectorPromise ||= (async () => {
+    if ('BarcodeDetector' in window) {
+      try {
+        const sup = await window.BarcodeDetector.getSupportedFormats();
+        if (sup.includes('ean_13')) return new window.BarcodeDetector({ formats: BC_FORMATS.filter(f => sup.includes(f)) });
+      } catch {}
+    }
+    const m = await import(BD_URL);
+    return new m.BarcodeDetector({ formats: BC_FORMATS });
+  })().catch(e => { detectorPromise = null; throw e; }));
+}
 function openBarcode() {
-  let scanner = null, done = false;
+  let stream = null, stopped = false, done = false, timer = null;
   const stop = () => {
-    if (!scanner) return;
-    const s = scanner; scanner = null;
-    try { Promise.resolve(s.stop()).then(() => s.clear()).catch(() => {}); } catch {}
+    stopped = true; clearTimeout(timer);
+    stream?.getTracks().forEach(t => t.stop()); stream = null;
   };
   openSheet(`
     <h2>Scanner un code-barres</h2>
-    <div id="reader"></div>
-    <p class="muted small center" id="bc-msg">Tiens le téléphone à 15-20 cm, code-barres à l'horizontale, bien éclairé.</p>
+    <div class="scanbox" id="scanbox">
+      <video id="bc-video" playsinline muted autoplay></video>
+      <div class="aim"><i></i></div>
+      <button class="torch" id="bc-torch" hidden aria-label="Lampe">💡</button>
+    </div>
+    <p class="muted small center" id="bc-msg">Démarrage de la caméra…</p>
     <div class="row2" style="grid-template-columns:1fr auto;margin-top:10px">
       <input class="input num" id="bc-in" inputmode="numeric" placeholder="ou tape les chiffres">
       <button class="btn" id="bc-go" style="margin:0;width:auto;padding:0 18px">OK</button>
     </div>`, sh => {
-    const msg = $('#bc-msg', sh);
+    const msg = $('#bc-msg', sh), video = $('#bc-video', sh);
     const lookup = async code => {
       if (done) return; done = true; stop();
-      msg.innerHTML = '<span class="spinner" style="display:block;width:24px;height:24px;margin:6px auto"></span>Recherche du produit…';
+      msg.innerHTML = '<span class="spinner" style="display:block;width:24px;height:24px;margin:6px auto"></span>Recherche du produit ' + esc(code) + '…';
       try {
         const f = await offProduct(code);
         if (f) return openFood({ ...(S.foods['b:' + code] || {}), ...f }, 'barcode');
         const saved = S.foods['b:' + code];
         if (saved) return openFood(saved, 'barcode');
-        done = false;
-        msg.innerHTML = `Produit inconnu (${esc(code)}). <button class="chip" id="bc-search" style="margin-top:8px">Le chercher par son nom</button>`;
+        msg.innerHTML = `Produit inconnu dans la base (${esc(code)}). <button class="chip" id="bc-search" style="margin-top:8px">Le chercher par son nom</button>`;
         $('#bc-search', sh).onclick = () => openSearch();
       } catch {
-        done = false; msg.textContent = 'Pas de connexion. Réessaie dans un instant.';
+        msg.textContent = 'Pas de connexion. Réessaie dans un instant.';
       }
     };
-    $('#bc-go', sh).onclick = () => { const c = $('#bc-in', sh).value.replace(/\D/g, ''); if (c.length >= 6) lookup(c); };
-    loadScript(QR_URL).then(() => {
-      if (!document.getElementById('reader')) return;
-      const F = window.Html5QrcodeSupportedFormats;
-      // Lecteur natif du téléphone si disponible (Android), sinon lecteur JS ; image HD et mise au point continue.
-      scanner = new window.Html5Qrcode('reader', { formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E], verbose: false,
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
-      scanner.start({ facingMode: 'environment' }, {
-        fps: 25, disableFlip: true, aspectRatio: 1.333,
-        qrbox: (w, h) => ({ width: Math.floor(w * 0.9), height: Math.max(80, Math.floor(h * 0.55)) }),
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
-      }, text => { const c = text.replace(/\D/g, ''); if (validEAN(c)) { navigator.vibrate?.(60); lookup(c); } }, () => {})
-        .catch(() => { scanner = null; $('#reader', sh).style.display = 'none'; msg.textContent = 'Caméra non disponible : autorise la caméra, ou tape le numéro sous le code-barres.'; });
-    }).catch(() => { msg.textContent = 'Le scanner n\'a pas pu se charger (réseau). Tape le numéro.'; });
+    $('#bc-go', sh).onclick = () => { const c = $('#bc-in', sh).value.replace(/\D/g, ''); if (c.length >= 6) { done = false; lookup(c); } };
+
+    (async () => {
+      let det;
+      try {
+        [det, stream] = await Promise.all([
+          getDetector(),
+          navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } }),
+        ]);
+      } catch (e) {
+        if (stream) stop();
+        $('#scanbox', sh).style.display = 'none';
+        msg.textContent = e?.name === 'NotAllowedError'
+          ? 'Kalo n\'a pas accès à la caméra. Autorise-la dans les réglages du téléphone, ou tape le numéro.'
+          : 'Le scanner n\'a pas pu démarrer. Tape le numéro sous le code-barres.';
+        return;
+      }
+      if (stopped) return stop();
+      const track = stream.getVideoTracks()[0];
+      try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch {}
+      try {
+        if (track.getCapabilities?.().torch) {
+          let on = false; const tb = $('#bc-torch', sh); tb.hidden = false;
+          tb.onclick = async () => { on = !on; try { await track.applyConstraints({ advanced: [{ torch: on }] }); tb.classList.toggle('on', on); } catch {} };
+        }
+      } catch {}
+      video.srcObject = stream;
+      try { await video.play(); } catch {}
+      msg.textContent = 'Place le code-barres dans le cadre, à 10-20 cm.';
+      // On analyse la bande centrale de l'image (là où est le cadre), plusieurs fois par seconde.
+      const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+      const scan = async () => {
+        if (stopped || done) return;
+        try {
+          const vw = video.videoWidth, vh = video.videoHeight;
+          if (vw && vh) {
+            const sw = Math.round(vw * 0.9), shh = Math.round(vh * 0.5);
+            cv.width = sw; cv.height = shh;
+            cx.drawImage(video, (vw - sw) / 2, (vh - shh) / 2, sw, shh, 0, 0, sw, shh);
+            const found = await det.detect(cv);
+            for (const b of found) {
+              const c = String(b.rawValue || '').replace(/\D/g, '');
+              if (validEAN(c)) { navigator.vibrate?.(60); return lookup(c); }
+            }
+          }
+        } catch {}
+        timer = setTimeout(scan, 120);
+      };
+      scan();
+    })();
     return stop;
   });
 }
@@ -824,7 +941,9 @@ function reviewAI(res, source, thumb) {
       <button class="chip on" data-mode="one">Un seul plat</button>
       <button class="chip" data-mode="split">Aliment par aliment</button>
     </div>
-    <button class="btn" id="ai-add">Ajouter au journal</button>`, sh => {
+    <button class="btn" id="ai-add">Ajouter au journal</button>
+    <button class="btn ghost" id="ai-skip">Ne pas enregistrer</button>`, sh => {
+    $('#ai-skip', sh).onclick = closeSheet;
     bindMealChips(sh, m => (UI.meal = m));
     let mode = 'one';
     $$('[data-mode]', sh).forEach(b => b.onclick = () => { mode = b.dataset.mode; $$('[data-mode]', sh).forEach(x => x.classList.toggle('on', x === b)); });
