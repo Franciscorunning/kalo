@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '21';
+const APP_VERSION = '22';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -103,7 +103,8 @@ function loginForm(id) {
     <label class="field"><span>Mot de passe (ou code Kalo)</span><input class="input" type="password" name="password" id="${id}-code" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ton mot de passe"></label>
     <button class="btn" type="submit" id="${id}-go">Se connecter</button>
   </form>
-  <p class="muted small" style="margin:10px 4px 0">🔑 Ton téléphone (ou ton navigateur) te proposera d'enregistrer le code : accepte. La prochaine fois, il le remplira tout seul.</p>`;
+  <p class="muted small" style="margin:10px 4px 0">ℹ️ Ici, on <b>se connecte</b>. Pas encore de mot de passe simple ? Crée-le d'abord sur l'appareil déjà connecté (Profil → 🔑 Mot de passe simple), ou colle ton long code Kalo dans le champ.</p>
+  <p class="muted small" style="margin:6px 4px 0">🔑 Ton téléphone (ou ton navigateur) te proposera d'enregistrer le mot de passe : accepte. La prochaine fois, il le remplira tout seul.</p>`;
 }
 function bindLoginForm(root, id, onDone) {
   $(`#${id}-form`, root).onsubmit = async ev => {
