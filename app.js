@@ -99,7 +99,7 @@ const freshState = () => ({ profile: null, apiKey: '', days: {}, foods: {}, meal
 function loginForm(id) {
   return `<form id="${id}-form" autocomplete="on">
     <label class="field"><span>Prénom</span><input class="input" name="username" id="${id}-who" autocomplete="username" value="${esc(S.who || '')}" placeholder="ex. Francisco"></label>
-    <label class="field"><span>Code Kalo</span><input class="input" type="password" name="password" id="${id}-code" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ton code Kalo"></label>
+    <label class="field"><span>Mot de passe (ou code Kalo)</span><input class="input" type="password" name="password" id="${id}-code" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ton mot de passe"></label>
     <button class="btn" type="submit" id="${id}-go">Se connecter</button>
   </form>
   <p class="muted small" style="margin:10px 4px 0">🔑 Ton téléphone (ou ton navigateur) te proposera d'enregistrer le code : accepte. La prochaine fois, il le remplira tout seul.</p>`;
@@ -107,10 +107,20 @@ function loginForm(id) {
 function bindLoginForm(root, id, onDone) {
   $(`#${id}-form`, root).onsubmit = async ev => {
     ev.preventDefault();
-    const code = $(`#${id}-code`, root).value.replace(/\s+/g, ''), who = $(`#${id}-who`, root).value.trim();
-    if (code.length < 16) return toast('Colle le code complet');
+    const pass = $(`#${id}-code`, root).value.trim(), who = $(`#${id}-who`, root).value.trim();
+    if (!pass) return toast('Tape ton mot de passe');
     const btn = $(`#${id}-go`, root); btn.disabled = true; btn.textContent = 'Connexion…';
+    // 1) prénom + mot de passe simple ; 2) sinon, si ça ressemble à un code Kalo, on l'utilise tel quel
+    let code = null, viaPw = false;
+    try {
+      const lr = await fetch(`${RELAY_URL}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: who, password: pass }) });
+      if (lr.ok) { code = (await lr.json()).code; viaPw = true; }
+      else if (lr.status === 429) { btn.disabled = false; btn.textContent = 'Se connecter'; return toast('Trop d\'essais : réessaie dans 15 minutes'); }
+    } catch {}
+    if (!code && pass.replace(/\s+/g, '').length >= 24) code = pass.replace(/\s+/g, '');
+    if (!code) { btn.disabled = false; btn.textContent = 'Se connecter'; return toast('Prénom ou mot de passe incorrect'); }
     const r = await loginWith(code, who);
+    if (r.ok && viaPw) { S.pwName = who; rawSave(); }
     btn.disabled = false; btn.textContent = 'Se connecter';
     if (!r.ok) return toast(r.err || 'Connexion impossible');
     onDone();
@@ -1888,6 +1898,15 @@ function renderProfile(app) {
         ? `<div class="key-ok">✓ Connecté${S.who ? ' : ' + esc(S.who) : ''} · sauvegarde en ligne active${S.syncLast ? '<br><span>Dernière sauvegarde ' + agoText(S.syncLast) + '</span>' : ''}${S.garminLast ? '<br><span>Garmin : dernière récupération ' + agoText(S.garminLast) + '</span>' : ''}</div>
            ${S.syncErr ? `<p class="small" style="color:var(--bad);margin:8px 4px 0">⚠️ ${esc(S.syncErr)}</p>` : ''}
            <p class="muted small" style="margin:10px 4px 0">Tes repas, poids, favoris et réglages sont gardés en ligne. Sur un autre appareil (ou si tu perds ce téléphone), colle ton code Kalo pour tout retrouver. Garde ce code précieusement.</p>
+           <div class="pw-box">
+             <b>🔑 Mot de passe simple</b>
+             <p class="muted small" style="margin:4px 0 8px">${S.pwName ? `✓ Tu te connectes avec <b>${esc(S.pwName)}</b> + ton mot de passe.` : 'Pour te connecter avec ton prénom et un mot de passe facile, au lieu du long code.'}</p>
+             <form id="pw-form" autocomplete="on">
+               <input class="input" name="username" id="pw-name" autocomplete="username" value="${esc(S.pwName || S.who || '')}" placeholder="prénom" style="margin-bottom:8px">
+               <input class="input" type="password" name="new-password" id="pw-pass" autocomplete="new-password" placeholder="${S.pwName ? 'nouveau mot de passe' : 'mot de passe (6 caractères min.)'}">
+               <button class="btn ghost" type="submit" id="pw-go">${S.pwName ? 'Changer le mot de passe' : 'Créer mon mot de passe'}</button>
+             </form>
+           </div>
            <button class="btn" id="s-now">Sauvegarder maintenant</button>
            <button class="btn ghost" id="g-now">Récupérer Garmin (toute l'année)</button>
            <label class="toggle"><input type="checkbox" id="g-auto" ${S.garminAuto !== false ? 'checked' : ''}> Récupérer Garmin tout seul à l'ouverture</label>
@@ -1996,6 +2015,22 @@ function renderProfile(app) {
   if ($('#g-auto')) $('#g-auto').onchange = ev => { S.garminAuto = ev.target.checked; save(); };
   if ($('#g-off')) $('#g-off').onclick = logout;
   if ($('#s-now')) $('#s-now').onclick = async () => { await cloudSync(false); render(); };
+  if ($('#pw-form')) $('#pw-form').onsubmit = async ev => {
+    ev.preventDefault();
+    const name = $('#pw-name').value.trim(), pass = $('#pw-pass').value;
+    if (name.length < 2) return toast('Indique ton prénom');
+    if (pass.length < 6) return toast('Au moins 6 caractères');
+    const b = $('#pw-go'); b.disabled = true;
+    try {
+      const r = await fetch(`${RELAY_URL}/password`, { method: 'POST', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password: pass }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 409) return toast('Ce prénom est déjà pris : ajoute une initiale (ex. francisco-r)');
+      if (!r.ok) return toast('Impossible pour l\'instant, réessaie');
+      S.pwName = name; S.who = name; rawSave(); render();
+      toast('Mot de passe enregistré ✓ Accepte si le téléphone propose de l\'enregistrer');
+    } catch { toast('Pas de connexion, réessaie'); }
+    finally { b.disabled = false; }
+  };
   $('#x-exp').onclick = exportBackup;
   $('#x-csv2').onclick = exportCSV;
   $('#x-imp').onclick = () => $('#x-file').click();

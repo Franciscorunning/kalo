@@ -357,3 +357,6 @@ table.mt { font-size: 13.5px; }
 .fe-row .g { width: 64px; text-align: right; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); }
 .fe-del { width: 30px; height: 30px; border-radius: 50%; background: var(--card2); color: var(--bad); font-weight: 800; flex: none; }
 .chev-r { font-size: 22px; color: var(--muted); padding-left: 6px; }
+
+.pw-box { background: var(--card2); border-radius: 14px; padding: 12px; margin-top: 12px; }
+.pw-box .input { background: var(--card); }
