@@ -1107,8 +1107,10 @@ function renderProfile(app) {
     <div class="card">
       <h3>Analyse des photos par l'IA</h3>
       <p class="muted small" style="margin-top:0">${S.apiKey ? `✓ Clé enregistrée : <b class="num">${esc(S.apiKey.slice(0, 14))}…${esc(S.apiKey.slice(-4))}</b> (${S.apiKey.length} caractères, normalement 108).` : 'Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.'}</p>
-      <input class="input" id="p-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-ant-…" value="">
-      <p class="muted small" style="margin:6px 4px 0">Pour la changer : colle la nouvelle clé ici, puis Enregistrer.</p>
+      <button class="btn" id="k-paste">📋 Coller ma clé</button>
+      <p class="muted small" style="margin:10px 4px 6px">Ou appuie longtemps dans le champ ci-dessous, puis « Coller » :</p>
+      <textarea class="input key-in" id="p-key" rows="2" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-ant-…"></textarea>
+      <p class="small" id="k-check" style="margin:6px 4px 0"></p>
       <button class="btn" id="k-save">Enregistrer la clé</button>
       ${S.apiKey ? '<button class="btn ghost" id="k-test">Tester la clé</button><p class="small center" id="k-res" style="margin:8px 0 0"></p>' : ''}
     </div>
@@ -1157,9 +1159,25 @@ function renderProfile(app) {
   $('#t-recalc').onclick = () => {
     P.goal = goal; P.weight = latestWeight() || P.weight; const kc = computeTargets(P).kcal, pc = readPct(); P.targets = { kcal: kc, ...gramsFrom(kc, pc), pct: pc }; save(); render(); toast('Calories recalculées : ' + fmt(kc) + ' kcal');
   };
+  // Garde seulement les caractères possibles d'une clé (enlève espaces, guillemets, caractères invisibles).
+  const cleanKey = v => String(v || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const keyIn = $('#p-key');
+  const checkKey = () => {
+    const k = cleanKey(keyIn.value), out = $('#k-check');
+    if (!k) { out.textContent = ''; return; }
+    const ok = k.startsWith('sk-ant-') && k.length >= 90;
+    out.innerHTML = `<span style="color:var(${ok ? '--good' : '--bad'});font-weight:650">${ok ? '✓' : '⚠️'} ${esc(k.slice(0, 14))}…${esc(k.slice(-4))} · ${k.length} caractères</span>${ok ? '' : ' <span class="muted">(une clé complète commence par sk-ant- et fait environ 108 caractères)</span>'}`;
+  };
+  keyIn.oninput = checkKey;
+  $('#k-paste').onclick = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t) return toast('Le presse-papiers est vide : copie d\'abord ta clé');
+      keyIn.value = cleanKey(t); checkKey();
+    } catch { toast('Appuie longtemps dans le champ puis « Coller »'); keyIn.focus(); }
+  };
   $('#k-save').onclick = () => {
-    // Garde seulement les caractères possibles d'une clé (enlève espaces, guillemets, caractères invisibles).
-    const k = $('#p-key').value.replace(/[^A-Za-z0-9_-]/g, '');
+    const k = cleanKey(keyIn.value);
     if (!k) return toast('Colle ta clé dans le champ');
     if (k && !k.startsWith('sk-ant-')) return toast('Cette clé ne ressemble pas à une clé Anthropic');
     S.apiKey = k; save(); render(); toast(k ? 'Clé enregistrée' : 'Clé effacée');
