@@ -1,5 +1,5 @@
 // Garde l'app disponible même sans réseau (les écrans, pas les recherches).
-const CACHE = 'kalo-v20';
+const CACHE = 'kalo-v21';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'aliments.json', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -13,7 +13,8 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   // Réseau d'abord (pour recevoir les mises à jour), cache si hors ligne.
   e.respondWith(
-    fetch(e.request).then(res => {
+    // no-cache : on redemande toujours au serveur s'il y a du neuf (sinon le téléphone garde l'ancienne version 10 min).
+    fetch(e.request.url, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;

@@ -1,5 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
+const APP_VERSION = '21';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -1933,7 +1934,7 @@ function renderProfile(app) {
       <p class="muted small" style="margin:0">${P.sex === 'h' ? 'Homme' : 'Femme'} · ${P.age} ans · ${P.height} cm · ${ACTIVITY.find(a => a.v === P.activity)?.t || ''}</p>
       <button class="btn ghost" id="x-redo">Refaire le questionnaire</button>
     </div>
-    <p class="center muted small">Kalo · usage personnel</p>`;
+    <p class="center muted small">Kalo · version ${APP_VERSION} · usage personnel</p>`;
   let goal = P.goal;
   $$('[data-goal]', app).forEach(b => b.onclick = () => { goal = b.dataset.goal; $$('[data-goal]', app).forEach(x => x.classList.toggle('on', x === b)); });
   const kIn = $('#t-k');
