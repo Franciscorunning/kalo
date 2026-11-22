@@ -30,9 +30,158 @@ function loadStore() {
   try { d = JSON.parse(localStorage.getItem(STORE)); } catch {}
   return Object.assign({ profile: null, apiKey: '', days: {}, foods: {}, meals: [] }, d || {});
 }
-function save() {
+function rawSave() {
   try { localStorage.setItem(STORE, JSON.stringify(S)); }
   catch { toast('Mémoire pleine : exporte une sauvegarde dans Profil'); }
+}
+function save() {
+  const changed = stamp();
+  rawSave();
+  if (changed) scheduleSync();
+}
+
+/* ====================== Sauvegarde en ligne (synchro entre appareils) ======================
+   Les données sont gardées dans le coffre privé du relais (compte Cloudflare de Francisco), une entrée par code.
+   Chaque jour / aliment / repas favori porte l'heure de sa dernière modification (u) ; les suppressions laissent
+   une trace (tomb). À chaque synchro on fusionne : pour chaque élément, la version la plus récente gagne. */
+const stripU = o => { const { u, ...r } = o || {}; return JSON.stringify(r); };
+const settingsOf = st => JSON.stringify({ profile: st.profile || null, startDate: st.startDate ?? null });
+let lastSnap = null;
+function snapOf(st) {
+  const m = o => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, stripU(v)]));
+  return { days: m(st.days), foods: m(st.foods), meals: Object.fromEntries((st.meals || []).map(x => [x.id, stripU(x)])), settings: settingsOf(st) };
+}
+function stamp() {
+  if (!lastSnap) { lastSnap = snapOf(S); return false; }
+  const now = Date.now(), cur = snapOf(S); let changed = false;
+  S.tomb = S.tomb || {};
+  const cmp = (prefix, curMap, oldMap, getObj) => {
+    for (const k in curMap) if (curMap[k] !== oldMap[k]) { const o = getObj(k); if (o) o.u = now; delete S.tomb[prefix + k]; changed = true; }
+    for (const k in oldMap) if (!(k in curMap)) { S.tomb[prefix + k] = now; changed = true; }
+  };
+  cmp('d:', cur.days, lastSnap.days, k => S.days[k]);
+  cmp('f:', cur.foods, lastSnap.foods, k => S.foods[k]);
+  cmp('m:', cur.meals, lastSnap.meals, k => (S.meals || []).find(x => x.id === k));
+  if (cur.settings !== lastSnap.settings) { S.setU = now; changed = true; }
+  lastSnap = cur;
+  return changed;
+}
+const docOf = st => ({ days: st.days || {}, foods: st.foods || {}, meals: st.meals || [], tomb: st.tomb || {}, profile: st.profile || null, startDate: st.startDate, setU: st.setU || 0 });
+function mergeDocs(L, R, remoteSettingsWin) {
+  const tomb = { ...(R.tomb || {}) };
+  for (const [k, t] of Object.entries(L.tomb || {})) tomb[k] = Math.max(tomb[k] || 0, t);
+  const mergeMap = (prefix, a, b) => {
+    const out = {};
+    for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+      const x = a?.[k], y = b?.[k];
+      const pick = !x ? y : !y ? x : ((x.u || 0) >= (y.u || 0) ? x : y);
+      if (tomb[prefix + k] && tomb[prefix + k] >= (pick.u || 0)) continue;
+      out[k] = pick;
+    }
+    return out;
+  };
+  const byId = arr => Object.fromEntries((arr || []).map(x => [x.id, x]));
+  const useR = remoteSettingsWin ? !!R.profile : ((R.setU || 0) > (L.setU || 0) || !L.profile);
+  return {
+    days: mergeMap('d:', L.days, R.days), foods: mergeMap('f:', L.foods, R.foods),
+    meals: Object.values(mergeMap('m:', byId(L.meals), byId(R.meals))), tomb,
+    profile: useR ? R.profile : L.profile, startDate: useR ? R.startDate : L.startDate,
+    setU: Math.max(L.setU || 0, R.setU || 0),
+  };
+}
+/* ---------- Connexion (code Kalo) et déconnexion ---------- */
+async function sha256(t) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+const freshState = () => ({ profile: null, apiKey: '', days: {}, foods: {}, meals: [] });
+// Formulaire avec prénom + code (champ mot de passe) : le téléphone propose de l'enregistrer.
+function loginForm(id) {
+  return `<form id="${id}-form" autocomplete="on">
+    <label class="field"><span>Prénom</span><input class="input" name="username" id="${id}-who" autocomplete="username" value="${esc(S.who || '')}" placeholder="ex. Francisco"></label>
+    <label class="field"><span>Code Kalo</span><input class="input" type="password" name="password" id="${id}-code" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ton code Kalo"></label>
+    <button class="btn" type="submit" id="${id}-go">Se connecter</button>
+  </form>
+  <p class="muted small" style="margin:10px 4px 0">🔑 Ton téléphone (ou ton navigateur) te proposera d'enregistrer le code : accepte. La prochaine fois, il le remplira tout seul.</p>`;
+}
+function bindLoginForm(root, id, onDone) {
+  $(`#${id}-form`, root).onsubmit = async ev => {
+    ev.preventDefault();
+    const code = $(`#${id}-code`, root).value.replace(/\s+/g, ''), who = $(`#${id}-who`, root).value.trim();
+    if (code.length < 16) return toast('Colle le code complet');
+    const btn = $(`#${id}-go`, root); btn.disabled = true; btn.textContent = 'Connexion…';
+    const r = await loginWith(code, who);
+    btn.disabled = false; btn.textContent = 'Se connecter';
+    if (!r.ok) return toast(r.err || 'Connexion impossible');
+    onDone();
+  };
+}
+// Se connecter : si l'appareil contient les données d'un AUTRE compte, on les retire d'abord (elles sont déjà en ligne).
+async function loginWith(code, who) {
+  const h = await sha256(code);
+  const hasLocal = !!S.profile || Object.keys(S.days || {}).length > 0 || (S.meals || []).length > 0;
+  if (hasLocal && S.linkedHash && S.linkedHash !== h) { const k = S.apiKey; S = freshState(); S.apiKey = k; }
+  if (!S.profile) { S.days = {}; S.foods = {}; S.meals = []; S.tomb = {}; }
+  S.garminCode = code; S.who = who || S.who || ''; S.garminAuto = S.garminAuto !== false; S.syncOnce = false;
+  lastSnap = snapOf(S); rawSave();
+  const ok = await cloudSync(true);
+  if (!ok) {
+    const err = S.syncErr;
+    if (/Code/.test(err || '')) { S.garminCode = ''; rawSave(); }
+    return { ok: false, err };
+  }
+  S.linkedHash = h; rawSave();
+  await checkStartByCode();
+  if (S.profile) garminSync(true, (S.garminV || 0) < 2 ? 366 : undefined);
+  return { ok: true };
+}
+async function logout() {
+  if (!confirm('Se déconnecter de cet appareil ? Tes données restent sauvegardées en ligne : tu les retrouveras en te reconnectant.')) return;
+  const ok = await cloudSync(true);
+  if (!ok && !confirm(`La sauvegarde en ligne n'a pas marché (${S.syncErr || 'erreur'}). Te déconnecter quand même ? Les derniers changements faits sur cet appareil seraient perdus.`)) return;
+  const k = S.apiKey; S = freshState(); S.apiKey = k;
+  lastSnap = snapOf(S); rawSave();
+  onb.i = 0; UI.view = 'jour'; UI.date = todayKey(); UI.open = new Set(); closeSheet(); render(); toast('Déconnecté');
+}
+let syncBusy = false, syncTimer = null, syncAgain = false;
+function scheduleSync() {
+  if (!S.garminCode) return;
+  clearTimeout(syncTimer); syncTimer = setTimeout(() => cloudSync(true), 2500);
+}
+async function cloudSync(silent) {
+  if (!S.garminCode) return false;
+  if (syncBusy) { syncAgain = true; return false; }
+  syncBusy = true; clearTimeout(syncTimer);
+  try {
+    stamp();
+    const r = await fetch(`${RELAY_URL}/data`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
+    if (r.status === 401) throw new Error('Code refusé : vérifie-le dans Profil.');
+    if (!r.ok) throw new Error('net');
+    const remote = (await r.json()).doc;
+    const local = docOf(S), before = JSON.stringify(local);
+    const merged = remote ? mergeDocs(local, remote, !S.syncOnce && !!remote.profile) : local;
+    S.days = merged.days; S.foods = merged.foods; S.meals = merged.meals; S.tomb = merged.tomb;
+    S.profile = merged.profile; S.setU = merged.setU;
+    if (merged.startDate !== undefined) S.startDate = merged.startDate;
+    lastSnap = snapOf(S);
+    const out = JSON.stringify(docOf(S));
+    if (!remote || out !== JSON.stringify(remote)) {
+      const p = await fetch(`${RELAY_URL}/data`, { method: 'PUT', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ doc: docOf(S) }) });
+      if (!p.ok) throw new Error('net');
+    }
+    S.syncOnce = true; S.syncLast = Date.now(); S.syncErr = ''; rawSave();
+    const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+    if (out !== before && !$('#sheet-root').innerHTML && !typing) render();
+    if (!silent) toast('Sauvegardé en ligne ✓');
+    return true;
+  } catch (e) {
+    S.syncErr = e.message === 'net' || /fetch/i.test(e.message) ? 'Pas de connexion' : e.message; rawSave();
+    if (!silent) toast(S.syncErr === 'Pas de connexion' ? 'Pas de connexion : la sauvegarde se fera plus tard.' : S.syncErr);
+    return false;
+  } finally {
+    syncBusy = false;
+    if (syncAgain) { syncAgain = false; scheduleSync(); }
+  }
 }
 function day(k) { return S.days[k] || (S.days[k] = { entries: [] }); }
 function cleanDay(k) {
@@ -203,6 +352,7 @@ function renderOnboarding(app) {
     return;
   }
   const s = steps[onb.i];
+  const restore = onb.i === 0 ? `<button class="btn ghost" id="onb-restore" style="margin-top:14px">☁️ J'ai déjà un compte Kalo : me connecter</button>` : '';
   app.innerHTML = `<div class="onb">
     <div class="progress"><i style="width:${(onb.i + 1) / (steps.length + 1) * 100}%"></i></div>
     ${onb.i === 0 ? '<img src="icon-192.png" alt="Kalo" width="72" height="72" style="border-radius:18px;margin:22px 0 4px;box-shadow:var(--shadow)">' : ''}
@@ -211,6 +361,7 @@ function renderOnboarding(app) {
     ${s.body}
     <div class="grow"></div>
     <button class="btn" id="onb-next" ${s.ok() ? '' : 'disabled'}>Continuer</button>
+    ${restore}
     ${onb.i > 0 ? '<button class="btn ghost" id="onb-back">Retour</button>' : ''}
   </div>`;
   const refresh = () => { $('#onb-next').disabled = !s.ok(); };
@@ -220,6 +371,13 @@ function renderOnboarding(app) {
   });
   $$('[data-in]', app).forEach(i => i.oninput = () => { p[i.dataset.in] = i.value; refresh(); });
   $('#onb-next').onclick = () => { onb.i++; render(); };
+  if ($('#onb-restore')) $('#onb-restore').onclick = () => openSheet(`
+    <h2>☁️ Me connecter</h2>
+    <p class="muted" style="margin-top:-6px">Avec ton code Kalo, tu retrouves toutes tes données.</p>
+    ${loginForm('rs')}`, sh => bindLoginForm(sh, 'rs', () => {
+      if (!S.profile) return toast('Aucune donnée trouvée pour ce code : remplis le questionnaire.');
+      closeSheet(); UI.view = 'jour'; render(); toast('Connecté ✓ · données retrouvées');
+    }));
   if ($('#onb-back')) $('#onb-back').onclick = () => { onb.i--; render(); };
 }
 
@@ -643,6 +801,7 @@ async function garminSync(silent, days) {
 }
 // Rappel de sauvegarde : dès 3 jours notés, puis toutes les semaines.
 function backupDue() {
+  if (S.garminCode && S.syncLast && Date.now() - S.syncLast < 3 * 864e5) return false;
   if (Object.keys(S.days).length < 3) return false;
   const last = Math.max(S.lastBackup || 0, S.backupSnooze || 0);
   return Date.now() - last > 7 * 864e5;
@@ -1724,19 +1883,21 @@ function renderProfile(app) {
       <button class="btn ghost" id="sd-go">Appliquer cette date</button>
     </div>
     <div class="card">
-      <h3>⌚ Garmin</h3>
+      <h3>☁️ Sauvegarde en ligne et ⌚ Garmin</h3>
       ${S.garminCode
-        ? `<div class="key-ok">✓ Relié à Garmin${S.garminLast ? '<br><span>Dernière récupération ' + agoText(S.garminLast) + '</span>' : ''}</div>
-           <button class="btn" id="g-now">Récupérer maintenant (toute l'année)</button>
-           <label class="toggle"><input type="checkbox" id="g-auto" ${S.garminAuto !== false ? 'checked' : ''}> Récupérer tout seul à l'ouverture de Kalo</label>
-           <button class="btn danger" id="g-off">Délier Garmin de ce téléphone</button>`
-        : `<p class="muted small" style="margin-top:0">Colle ici ton code Kalo-Garmin pour que Kalo récupère tout seul tes pas et ton poids.</p>
-           <input class="input" id="g-code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="code Kalo-Garmin">
-           <button class="btn" id="g-save">Relier Garmin</button>`}
+        ? `<div class="key-ok">✓ Connecté${S.who ? ' : ' + esc(S.who) : ''} · sauvegarde en ligne active${S.syncLast ? '<br><span>Dernière sauvegarde ' + agoText(S.syncLast) + '</span>' : ''}${S.garminLast ? '<br><span>Garmin : dernière récupération ' + agoText(S.garminLast) + '</span>' : ''}</div>
+           ${S.syncErr ? `<p class="small" style="color:var(--bad);margin:8px 4px 0">⚠️ ${esc(S.syncErr)}</p>` : ''}
+           <p class="muted small" style="margin:10px 4px 0">Tes repas, poids, favoris et réglages sont gardés en ligne. Sur un autre appareil (ou si tu perds ce téléphone), colle ton code Kalo pour tout retrouver. Garde ce code précieusement.</p>
+           <button class="btn" id="s-now">Sauvegarder maintenant</button>
+           <button class="btn ghost" id="g-now">Récupérer Garmin (toute l'année)</button>
+           <label class="toggle"><input type="checkbox" id="g-auto" ${S.garminAuto !== false ? 'checked' : ''}> Récupérer Garmin tout seul à l'ouverture</label>
+           <button class="btn danger" id="g-off">Se déconnecter</button>`
+        : `<p class="muted small" style="margin-top:0">Connecte-toi avec ton code Kalo : toutes tes données seront sauvegardées en ligne (et retrouvées sur un autre appareil), et Kalo récupère tout seul tes pas, ton poids et tes calories Garmin.</p>
+           ${loginForm('pl')}`}
     </div>
     <div class="card">
-      <h3>Sauvegarde</h3>
-      <p class="muted small" style="margin-top:0">Tes données restent sur ce téléphone. Fais une copie de temps en temps (ou pour passer à un autre téléphone).</p>
+      <h3>Copie dans un fichier</h3>
+      <p class="muted small" style="margin-top:0">En plus de la sauvegarde en ligne, tu peux garder une copie de tes données dans un fichier.</p>
       <button class="btn ghost" id="x-exp">Télécharger une copie</button>
       <button class="btn ghost" id="x-csv2">⬇️ Exporter en CSV (tableur)</button>
       <button class="btn ghost" id="x-imp">Restaurer une copie</button>
@@ -1830,17 +1991,11 @@ function renderProfile(app) {
     if (before && !confirm(`Effacer de ce téléphone les ${before} jours avant le ${shortDate(v)} ? C'est définitif (pense à faire une copie avant si besoin).`)) return;
     const n = applyStartDate(v); render(); toast(n ? `${n} jours effacés · début le ${shortDate(v)}` : `Début le ${shortDate(v)}`);
   };
-  if ($('#g-save')) $('#g-save').onclick = async () => {
-    const c = $('#g-code').value.replace(/\s+/g, '');
-    if (c.length < 16) return toast('Colle le code complet');
-    S.garminCode = c; S.garminAuto = true; save();
-    await checkStartByCode();                 // date de début propre à ce téléphone, avant de récupérer Garmin
-    await garminSync(false, 366);
-    if (!S.garminLast) { S.garminCode = ''; save(); render(); }
-  };
+  if ($('#pl-form')) bindLoginForm(app, 'pl', () => { render(); toast('Connecté ✓ · sauvegarde en ligne active'); });
   if ($('#g-now')) $('#g-now').onclick = () => garminSync(false, 366);
   if ($('#g-auto')) $('#g-auto').onchange = ev => { S.garminAuto = ev.target.checked; save(); };
-  if ($('#g-off')) $('#g-off').onclick = () => { if (confirm('Délier Garmin de ce téléphone ?')) { S.garminCode = ''; S.garminLast = 0; save(); render(); } };
+  if ($('#g-off')) $('#g-off').onclick = logout;
+  if ($('#s-now')) $('#s-now').onclick = async () => { await cloudSync(false); render(); };
   $('#x-exp').onclick = exportBackup;
   $('#x-csv2').onclick = exportCSV;
   $('#x-imp').onclick = () => $('#x-file').click();
@@ -1907,9 +2062,18 @@ checkStartByCode();
 if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
 const garminAuto = () => { if (S.garminCode && S.garminAuto !== false && ((S.garminV || 0) < 2 || Date.now() - (S.garminLast || 0) > 30 * 60e3)) garminSync(true); };
-setTimeout(garminAuto, 800);
+lastSnap = snapOf(S);
+if (S.garminCode && !S.linkedHash && crypto.subtle) sha256(S.garminCode).then(h => { S.linkedHash = h; rawSave(); }).catch(() => {});
+let lastWake = 0;
+const wake = async () => {
+  if (Date.now() - lastWake < 20000) return; lastWake = Date.now();
+  if (S.garminCode) await cloudSync(true);
+  garminAuto();
+};
+setTimeout(wake, 600);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) garminAuto();
+  if (!document.hidden) wake();
+  else if (syncTimer && S.garminCode) cloudSync(true);
   // Si l'app reste ouverte jusqu'au lendemain, revenir sur le bon jour.
   if (!document.hidden && UI.view === 'jour' && UI.date < todayKey() && !$('#sheet-root').innerHTML) { UI.date = todayKey(); render(); }
 });
