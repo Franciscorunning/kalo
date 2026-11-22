@@ -37,7 +37,7 @@ function save() {
 function day(k) { return S.days[k] || (S.days[k] = { entries: [] }); }
 function cleanDay(k) {
   const d = S.days[k];
-  if (d && !d.entries.length && d.weight == null && d.steps == null && d.kcalImport == null) delete S.days[k];
+  if (d && !d.entries.length && d.weight == null && d.steps == null && d.kcalImport == null && d.kcalOut == null) delete S.days[k];
 }
 // Calories d'un jour : les repas notés, sinon le total importé.
 function dayKcal(d) {
@@ -144,7 +144,6 @@ $('#fab').addEventListener('click', () => openAdd());
 function renderFavsTab(app) {
   if (!UI.meal) UI.meal = UI.date === todayKey() ? defaultMeal() : 'midi';
   app.innerHTML = `<div class="top"><h1>Favoris</h1></div>
-    <p class="muted small" style="margin:-8px 4px 12px">Ajouté à : ${dayLabel(UI.date).toLowerCase()}. Les repas favoris vont dans leur repas habituel.</p>
     <div id="favtab"></div>`;
   // Réutilise la feuille Favoris, mais affichée dans la page
   openFavs(null, $('#favtab', app));
@@ -265,7 +264,10 @@ function renderDay(app) {
     ${k !== today ? `<button class="today-link" id="go-today">↩ Revenir à aujourd'hui</button>` : ''}
     ${k > today ? `<div class="plan-banner">🗓️ <b>Jour à venir.</b> Ce que tu ajoutes ici est prévu ; ça comptera dans tes moyennes une fois le jour arrivé.</div>` : ''}
     <div class="card hero">
-      <div><div class="big num">${fmt(Math.abs(left))}</div><div class="sub">${left >= 0 ? 'calories restantes' : 'calories en trop'} · ${fmt(tot.kcal)} / ${fmt(T.kcal)}</div></div>
+      <div><div class="big num">${fmt(tot.kcal)}<span class="big-of"> / ${fmt(T.kcal)}</span></div>
+        <div class="sub">kcal mangées · <b class="${left >= 0 ? '' : 'over-t'}">${left >= 0 ? fmt(left) + ' restantes' : fmt(-left) + ' en trop'}</b></div>
+        ${d.kcalOut != null ? (() => { const bal = tot.kcal - d.kcalOut, goal = S.profile.goal, good = goal === 'gain' ? bal >= 0 : bal <= 0;
+          return `<div class="burn">⌚ Dépensé ${fmt(d.kcalOut)} kcal${k === today ? ' <span class="muted">(jusqu\'ici)</span>' : ''}<br><b class="${good ? 'ok-t' : 'over-t'}">${bal <= 0 ? 'Déficit ' + fmt(-bal) : 'Surplus ' + fmt(bal)} kcal</b></div>`; })() : ''}</div>
       ${ring(tot.kcal, T.kcal, 'var(--kcal)', ICON.flame)}
     </div>
     <div class="macros">
@@ -387,6 +389,26 @@ function openSaveFav(es, m) {
     };
   });
 }
+function whereBlock(target) {
+  const t = todayKey(), opts = [addDays(t, -1), t, addDays(t, 1)];
+  return `<div class="where">
+    <div class="where-l">Ajouter à</div>
+    <div class="chips" style="padding-bottom:8px">${opts.map(o => `<button class="chip ${o === UI.date ? 'on' : ''}" data-wday="${o}">${dayLabel(o)}</button>`).join('')}
+      <label class="chip date-chip ${opts.includes(UI.date) ? '' : 'on'}">📅 <input type="date" id="w-date" value="${UI.date}" max="${maxKey()}"></label></div>
+    <div class="chips" style="padding-bottom:4px"><button class="chip ${target ? '' : 'on'}" data-wmeal="">Repas habituel</button>${MEALS.map(m => `<button class="chip ${m.id === target ? 'on' : ''}" data-wmeal="${m.id}">${m.emoji} ${m.name}</button>`).join('')}</div>
+  </div>`;
+}
+function bindWhere(root, onMeal) {
+  $$('[data-wday]', root).forEach(b => b.onclick = () => {
+    UI.date = b.dataset.wday; $$('[data-wday]', root).forEach(x => x.classList.toggle('on', x === b)); $('.date-chip', root).classList.remove('on'); $('#w-date', root).value = UI.date;
+  });
+  $('#w-date', root).onchange = ev => {
+    if (!ev.target.value) return; UI.date = ev.target.value;
+    $$('[data-wday]', root).forEach(x => x.classList.toggle('on', x.dataset.wday === UI.date));
+    $('.date-chip', root).classList.toggle('on', !$$('[data-wday]', root).some(x => x.dataset.wday === UI.date));
+  };
+  $$('[data-wmeal]', root).forEach(b => b.onclick = () => { $$('[data-wmeal]', root).forEach(x => x.classList.toggle('on', x === b)); onMeal(b.dataset.wmeal); });
+}
 function favsBody(target) {
   const foods = Object.values(S.foods).filter(f => f.fav).sort((a, b) => (b.uses || 0) - (a.uses || 0));
   return `
@@ -396,9 +418,10 @@ function favsBody(target) {
     ${foods.length ? `<div class="list">${foods.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div>`
       : `<p class="muted small center" style="padding:10px">Touche l'étoile ☆ en haut d'un aliment pour l'ajouter ici.</p>`}`;
 }
-function bindFavFoods(root) {
+function bindFavFoods(root, getTarget) {
   $$('[data-pick^="favfood:"]', root).forEach(b => b.onclick = () => {
     const f = S.foods[b.dataset.pick.slice(8)];
+    UI.meal = (getTarget && getTarget()) || f?.lastMeal || (UI.date === todayKey() ? defaultMeal() : 'midi');
     if (f) openFood(f, f.barcode ? 'barcode' : 'search');
   });
 }
@@ -417,7 +440,7 @@ function openFavs(fixedMeal, inPage) {
       const k = UI.date, ids = copyEntries(f.items, k, target || f.meal);
       f.used = (f.used || 0) + 1; save();
       closeSheet(); UI.view = 'jour'; render();
-      toast('« ' + f.name + ' » ajouté ✓', 'Annuler', () => undoAdd(k, ids));
+      toast('« ' + f.name + ' » ajouté · ' + dayLabel(k).toLowerCase() + ' ✓', 'Annuler', () => undoAdd(k, ids));
     });
     $$('[data-favdel]', sh).forEach(b => b.onclick = () => {
       if (!confirm('Supprimer ce repas favori ?')) return;
@@ -425,15 +448,14 @@ function openFavs(fixedMeal, inPage) {
     });
   };
   if (inPage) {
-    inPage.innerHTML = favsBody();
-    draw(inPage); bindFavFoods(inPage);
+    inPage.innerHTML = whereBlock(target) + favsBody();
+    bindWhere(inPage, m => (target = m)); draw(inPage); bindFavFoods(inPage, () => target);
     return;
   }
   openSheet(`
     <h2>⭐ Favoris</h2>
-    ${UI.date !== todayKey() ? `<p class="muted small" style="margin:-8px 0 12px">Pour : ${dayLabel(UI.date).toLowerCase()}</p>` : ''}
-    <div class="chips"><button class="chip ${target ? '' : 'on'}" data-meal="">Son repas habituel</button>${MEALS.map(m => `<button class="chip ${m.id === target ? 'on' : ''}" data-meal="${m.id}">${m.emoji} ${m.name}</button>`).join('')}</div>
-    ${favsBody()}`, sh => { bindMealChips(sh, m => { target = m; if (m) UI.meal = m; }); draw(sh); bindFavFoods(sh); });
+    ${whereBlock(target)}
+    ${favsBody()}`, sh => { bindWhere(sh, m => (target = m)); draw(sh); bindFavFoods(sh, () => target); });
 }
 function openCopyFrom(k, mealId) {
   const today = todayKey();
@@ -519,6 +541,7 @@ async function garminSync(silent, days) {
       const d = day(k);
       if (v.weight != null && d.weight !== v.weight) { d.weight = v.weight; changed++; }
       if (v.steps != null && d.steps !== v.steps) { d.steps = v.steps; changed++; }
+      if (v.kcalOut != null && d.kcalOut !== v.kcalOut) { d.kcalOut = v.kcalOut; d.kcalActive = v.kcalActive ?? null; changed++; }
       cleanDay(k);
     }
     S.garminLast = Date.now(); save();
@@ -747,7 +770,7 @@ function openFood(f, source) {
       const q = num(g.value); if (!q) return toast('Indique une quantité');
       const k = q / 100;
       addEntry({ name: f.name, grams: r0(q), kcal: f.kcal100 * k, p: f.p100 * k, c: f.c100 * k, f: f.f100 * k, source, per100: pick100(f) });
-      rememberFood({ ...pick100(f), lastGrams: r0(q) });
+      rememberFood({ ...pick100(f), lastGrams: r0(q), lastMeal: UI.meal });
       save(); closeSheet(); UI.view = 'jour'; render(); toast('Ajouté ✓');
     };
   });
@@ -763,7 +786,9 @@ function openEntry(id) {
     <h2 style="margin-bottom:4px">${esc(e.name)}</h2>
     <p class="muted small" style="margin:0 0 14px">${srcEmoji(e.source)} ${({ photo: 'Photo analysée par l\'IA', barcode: 'Code-barres', ai: 'Estimé par l\'IA', manual: 'Saisie manuelle', search: 'Base d\'aliments' })[e.source] || ''}</p>
     ${e.img ? `<img class="photo-prev" src="${e.img}" alt="">` : ''}
+    <p class="muted small" style="margin:0 4px 6px">Repas (pour le déplacer, choisis-en un autre)</p>
     ${mealChips(e.meal)}
+    <label class="field"><span>Jour</span><input class="input" type="date" id="e-day" value="${k}" max="${maxKey()}"></label>
     ${scalable ? `<label class="field"><span>Quantité (grammes)</span><input class="input bigin num" id="e-g" inputmode="decimal" value="${r0(e.grams)}"></label>` : ''}
     <div class="row4">
       <label class="field"><span>kcal</span><input class="input num" id="e-k" inputmode="decimal" value="${r0(e.kcal)}"></label>
@@ -781,11 +806,19 @@ function openEntry(id) {
       $('#e-c', sh).value = fmt(p.c100 * r); $('#e-f', sh).value = fmt(p.f100 * r);
     };
     $('#e-save', sh).onclick = () => {
+      const moved = e.meal !== meal, newK = $('#e-day', sh).value || k;
       e.meal = meal;
       if (scalable) e.grams = r0(num($('#e-g', sh).value) || e.grams);
       e.kcal = r0(num($('#e-k', sh).value) ?? e.kcal); e.p = r1(num($('#e-p', sh).value) ?? e.p);
       e.c = r1(num($('#e-c', sh).value) ?? e.c); e.f = r1(num($('#e-f', sh).value) ?? e.f);
-      save(); closeSheet(); render(); toast('Modifié');
+      UI.open.add(meal);
+      if (newK !== k && newK <= maxKey()) {
+        d.entries = d.entries.filter(x => x.id !== id); cleanDay(k);
+        day(newK).entries.push(e); save(); closeSheet(); render();
+        toast('Déplacé vers ' + dayLabel(newK).toLowerCase() + ' ✓', 'Voir', () => { UI.date = newK; render(); });
+        return;
+      }
+      save(); closeSheet(); render(); toast(moved ? 'Déplacé vers ' + mealName(meal).toLowerCase() + ' ✓' : 'Modifié');
     };
     $('#e-del', sh).onclick = () => {
       d.entries = d.entries.filter(x => x.id !== id); cleanDay(k); save(); closeSheet(); render(); toast('Supprimé');
@@ -1340,7 +1373,8 @@ function periodStats(type) {
   for (const [k, d] of Object.entries(S.days)) {
     if (k > today) continue;                 // jours prévus : pas encore dans les moyennes
     const pk = periodKey(k, type);
-    const g = groups[pk] || (groups[pk] = { key: pk, kcal: [], steps: [], weight: [], prot: [] });
+    const g = groups[pk] || (groups[pk] = { key: pk, kcal: [], steps: [], weight: [], prot: [], bal: [] });
+    const kcDay = dayKcal(d); if (kcDay != null && d.kcalOut != null && k < today) g.bal.push(kcDay - d.kcalOut);
     if (d.entries?.length) { const t = totals(d.entries); g.kcal.push(t.kcal); g.prot.push(t.p); }
     else if (d.kcalImport != null) g.kcal.push(d.kcalImport);
     if (d.steps != null) g.steps.push(d.steps);
@@ -1354,8 +1388,8 @@ function periodStats(type) {
   let cur = keys[0];
   const end = periodKey(todayKey(), type);
   while (cur <= end) {
-    const g = groups[cur] || { key: cur, kcal: [], steps: [], weight: [], prot: [] };
-    list.push({ key: cur, kcal: avg(g.kcal), steps: avg(g.steps), weight: avg(g.weight), prot: avg(g.prot), days: g.kcal.length });
+    const g = groups[cur] || { key: cur, kcal: [], steps: [], weight: [], prot: [], bal: [] };
+    list.push({ key: cur, kcal: avg(g.kcal), steps: avg(g.steps), weight: avg(g.weight), prot: avg(g.prot), bal: avg(g.bal), days: g.kcal.length });
     cur = type === 'week' ? addDays(cur, 7) : (() => { const [y, m] = cur.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${pad(m + 1)}`; })();
   }
   list.forEach((p, i) => (p.prev = i > 0 ? list[i - 1] : null));
@@ -1379,7 +1413,9 @@ function dayRows() {
   const today = todayKey();
   return Object.keys(S.days).filter(k => k <= today).sort().reverse().map(k => {
     const d = S.days[k], t = d.entries?.length ? totals(d.entries) : null;
-    return { k, steps: d.steps ?? null, kcal: dayKcal(d), weight: d.weight ?? null, p: t ? t.p : null, c: t ? t.c : null, f: t ? t.f : null };
+    const kc = dayKcal(d);
+    return { k, steps: d.steps ?? null, kcal: kc, weight: d.weight ?? null, p: t ? t.p : null, c: t ? t.c : null, f: t ? t.f : null,
+      out: d.kcalOut ?? null, bal: kc != null && d.kcalOut != null && k < today ? kc - d.kcalOut : null };
   }).filter(r => r.steps != null || r.kcal != null || r.weight != null);
 }
 function weightSeries(rangeDays) {
@@ -1405,7 +1441,7 @@ function weightCard() {
   const ticks = [0, 0.5, 1].map(f => pts[Math.min(pts.length - 1, Math.round(f * (pts.length - 1)))].k);
   return `<div class="card">
     <div class="wt-head"><div><div class="muted small">Poids actuel</div><div class="wt-now num">${fmt(last, 1)}<small> kg</small></div></div>
-      <span class="delta ${Math.abs(pct) < 0.05 ? 'neutral' : good ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 1)} %</span></div>
+      <span class="delta ${Math.abs(pct) < 0.05 ? 'neutral' : good ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 2)} %</span></div>
     ${chips}
     <svg class="wt-svg" viewBox="0 0 ${W} ${H + 18}">
       ${[mx, (mx + mn) / 2, mn].map(v => `<line x1="${px}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 4"/><text class="axis" x="0" y="${y(v) + 3}">${fmt(v, 1)}</text>`).join('')}
@@ -1420,7 +1456,7 @@ function averagesCard() {
   const rows = dayRows();
   if (!rows.length) return '';
   const avg = key => { const v = rows.map(r => r[key]).filter(x => x != null); return { v: v.length ? v.reduce((a, b) => a + b, 0) / v.length : null, n: v.length }; };
-  const w = avg('weight'), st = avg('steps'), kc = avg('kcal'), pr = avg('p');
+  const w = avg('weight'), st = avg('steps'), kc = avg('kcal'), pr = avg('p'), out = avg('out'), bal = avg('bal');
   const tile = (ic, lab, col, val, n, unit) => `<div class="avg"><div class="al" style="color:${col}">${ic} ${lab}</div><div class="av num">${val}<small>${unit}</small></div><div class="an">sur ${n} jour${n > 1 ? 's' : ''}</div></div>`;
   return `<h2 class="st-h">Moyennes · tout l'historique</h2>
     <div class="avgs">
@@ -1428,6 +1464,8 @@ function averagesCard() {
       ${tile('👟', 'Pas', 'var(--good)', fmt(st.v), st.n, '')}
       ${tile('🔥', 'Kcal', 'var(--carb)', fmt(kc.v), kc.n, '')}
       ${tile('🥩', 'Protéines', 'var(--prot)', pr.v != null ? fmt(pr.v) : '–', pr.n, ' g')}
+      ${out.n ? tile('⌚', 'Dépensé', 'var(--fat)', fmt(out.v), out.n, '') : ''}
+      ${bal.n ? tile('⚖️', 'Bilan', bal.v <= 0 ? 'var(--good)' : 'var(--bad)', (bal.v > 0 ? '+' : '') + fmt(bal.v), bal.n, ' kcal') : ''}
     </div>
     <p class="muted small" style="margin:6px 4px 0">Depuis le ${shortDate(rows[rows.length - 1].k)}</p>`;
 }
@@ -1439,24 +1477,30 @@ function cls(metric, cur, prev) {
   if (metric === 'weight') return goal === 'lose' ? (pct < 0 ? 'good' : 'bad') : goal === 'gain' ? (pct > 0 ? 'good' : 'bad') : (Math.abs(pct) <= 0.5 ? 'good' : 'bad');
   return Math.abs(cur - T) <= Math.abs(prev - T) ? 'good' : 'bad';
 }
-const pctTxt = (cur, prev) => (cur == null || prev == null || !prev) ? '' : (() => { const p = (cur - prev) / prev * 100; return Math.abs(p) < 0.05 ? '=' : (p > 0 ? '▲' : '▼') + fmt(Math.abs(p), 1) + '%'; })();
+const pctTxt = (cur, prev) => (cur == null || prev == null || !prev) ? '' : (() => { const p = (cur - prev) / prev * 100; return Math.abs(p) < 0.005 ? '= 0,00 %' : (p > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(p), 2) + ' %'; })();
+function balCell(b) {
+  if (b == null) return '<td class="bal">—</td>';
+  const goal = S.profile.goal, good = goal === 'gain' ? b >= 0 : goal === 'lose' ? b <= 0 : Math.abs(b) <= 200;
+  return `<td class="bal ${good ? 'good' : 'bad'}">${b > 0 ? '+' : ''}${fmt(b)}</td>`;
+}
 function metricsTable() {
   const mode = UI.statMode;
   if (mode === 'jour') {
     const rows = dayRows(), shown = rows.slice(0, UI.statLimit);
     if (!rows.length) return '<p class="muted small center">Rien encore.</p>';
-    return `<table class="mt"><thead><tr><th>Date</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-kg">Kg</th></tr></thead><tbody>
-      ${shown.map(r => `<tr><td><b>${ddmm(r.k)}</b><small>${DOW[dateOf(r.k).getDay()]}</small></td><td>${r.steps != null ? fmt(r.steps) : '—'}</td><td>${r.kcal != null ? fmt(r.kcal) : '—'}</td><td>${r.weight != null ? fmt(r.weight, 1) : '—'}</td></tr>`).join('')}
+    return `<table class="mt"><thead><tr><th>Date</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-bal">Bilan</th><th class="c-kg">Kg</th></tr></thead><tbody>
+      ${shown.map(r => `<tr><td><b>${ddmm(r.k)}</b><small>${DOW[dateOf(r.k).getDay()]}</small></td><td>${r.steps != null ? fmt(r.steps) : '—'}</td><td>${r.kcal != null ? fmt(r.kcal) : '—'}</td>${balCell(r.bal)}<td>${r.weight != null ? fmt(r.weight, 1) : '—'}</td></tr>`).join('')}
       </tbody></table>${rows.length > shown.length ? `<button class="btn ghost" id="st-more">Voir plus (${rows.length - shown.length} jours)</button>` : ''}`;
   }
   const list = periodStats(mode === 'semaine' ? 'week' : 'month').filter(p => p.kcal != null || p.steps != null || p.weight != null).reverse();
   if (!list.length) return '<p class="muted small center">Rien encore.</p>';
   const lab = p => mode === 'semaine' ? `<b>${ddmm(p.key)}</b><small>sem. ${isoWeek(p.key)}</small>` : `<b>${(m => m[0].toUpperCase() + m.slice(1))(MON[Number(p.key.slice(5)) - 1])}</b><small>${p.key.slice(0, 4)}</small>`;
-  const cell = (m, cur, prev, dec) => `<td class="${cls(m, cur, prev)}">${cur != null ? fmt(cur, dec) : '—'}<small>${pctTxt(cur, prev)}</small></td>`;
-  return `<table class="mt"><thead><tr><th>${mode === 'semaine' ? 'Sem. du' : 'Mois'}</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-kg">Kg</th></tr></thead><tbody>
-    ${list.map(p => `<tr>${'<td>' + lab(p) + '</td>'}${cell('steps', p.steps, p.prev?.steps, 0)}${cell('kcal', p.kcal, p.prev?.kcal, 0)}${cell('weight', p.weight, p.prev?.weight, 1)}</tr>`).join('')}
+  const plain = (v, dec) => `<td>${v != null ? fmt(v, dec) : '—'}</td>`;
+  const wcell = (cur, prev) => `<td class="${cls('weight', cur, prev)}">${cur != null ? fmt(cur, 1) : '—'}<small>${pctTxt(cur, prev)}</small></td>`;
+  return `<table class="mt"><thead><tr><th>${mode === 'semaine' ? 'Sem. du' : 'Mois'}</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-bal">Bilan</th><th class="c-kg">Kg</th></tr></thead><tbody>
+    ${list.map(p => `<tr>${'<td>' + lab(p) + '</td>'}${plain(p.steps, 0)}${plain(p.kcal, 0)}${balCell(p.bal)}${wcell(p.weight, p.prev?.weight)}</tr>`).join('')}
     </tbody></table>
-    <p class="legend" style="margin-top:8px">Moyennes par jour. Le % compare ${mode === 'semaine' ? 'à la semaine' : 'au mois'} d'avant : vert = bon sens (poids selon ton objectif, plus de pas, calories plus proches de ${fmt(S.profile.targets.kcal)} kcal).</p>`;
+    <p class="legend" style="margin-top:8px">Moyennes par jour. Bilan = calories mangées − dépensées (Garmin). Le % du poids compare ${mode === 'semaine' ? 'à la semaine' : 'au mois'} d'avant : vert = dans le sens de ton objectif.</p>`;
 }
 function renderStats(app) {
   app.innerHTML = `
@@ -1474,9 +1518,9 @@ function renderStats(app) {
 async function exportCSV() {
   const rows = Object.keys(S.days).sort().map(k => {
     const d = S.days[k], t = d.entries?.length ? totals(d.entries) : null;
-    return [k, d.weight ?? '', d.steps ?? '', dayKcal(d) != null ? r0(dayKcal(d)) : '', t ? r1(t.p) : '', t ? r1(t.c) : '', t ? r1(t.f) : '', t ? d.entries.length : 0, k > todayKey() ? 'prevu' : ''];
+    return [k, d.weight ?? '', d.steps ?? '', dayKcal(d) != null ? r0(dayKcal(d)) : '', d.kcalOut ?? '', t ? r1(t.p) : '', t ? r1(t.c) : '', t ? r1(t.f) : '', t ? d.entries.length : 0, k > todayKey() ? 'prevu' : ''];
   });
-  const csv = 'date,poids_kg,pas,kcal,proteines_g,glucides_g,lipides_g,nb_aliments,note\n' + rows.map(r => r.join(',')).join('\n') + '\n';
+  const csv = 'date,poids_kg,pas,kcal_mangees,kcal_depensees,proteines_g,glucides_g,lipides_g,nb_aliments,note\n' + rows.map(r => r.join(',')).join('\n') + '\n';
   const name = `kalo-donnees-${todayKey()}.csv`;
   const file = new File([csv], name, { type: 'text/csv' });
   if (navigator.canShare?.({ files: [file] })) {

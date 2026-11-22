@@ -320,3 +320,20 @@ table.mt { width: 100%; border-collapse: collapse; font-variant-numeric: tabular
 .mt td { text-align: right; padding: 9px 6px; border-top: 1px solid var(--line); vertical-align: top; }
 .mt td small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
 .mt td.good small { color: var(--good); } .mt td.bad small { color: var(--bad); }
+
+/* v3 */
+.big-of { font-size: 20px; color: var(--muted); font-weight: 650; letter-spacing: 0; }
+.hero .sub b { font-weight: 700; color: var(--text); }
+.over-t { color: var(--bad) !important; }
+.ok-t { color: var(--good) !important; }
+.burn { font-size: 13px; margin-top: 8px; line-height: 1.45; }
+.where { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 12px 12px 4px; margin-bottom: 6px; }
+.where-l { font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 2px 8px; }
+.date-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; }
+.date-chip input { border: 0; background: transparent; font: inherit; color: inherit; width: 122px; }
+.mt th.c-bal { color: var(--fat); }
+.mt td.bal { font-weight: 650; }
+.mt td.bal.good { color: var(--good); } .mt td.bal.bad { color: var(--bad); }
+.mt td.good, .mt td.bad { color: inherit; }
+table.mt { font-size: 13.5px; }
+.mt td, .mt th { padding-left: 4px; padding-right: 4px; }
