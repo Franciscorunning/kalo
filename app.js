@@ -276,6 +276,7 @@ function renderDay(app) {
     <div class="quick">
       <button id="q-weight" class="${d.weight == null ? 'todo' : ''}"><span class="l">⚖️ Poids</span>${d.weight == null ? '<span class="empty">+ Ajouter</span>' : `<span class="v num">${fmt(d.weight, 1)} kg</span>`}</button>
       <button id="q-steps" class="${d.steps == null ? 'todo' : ''}"><span class="l">👟 Pas</span>${d.steps == null ? '<span class="empty">+ Ajouter</span>' : `<span class="v num">${fmt(d.steps)}</span>`}</button>
+      ${S.garminCode ? `<div class="qcard"><span class="l">⌚ Dépensé</span>${d.kcalOut != null ? `<span class="v num">${fmt(d.kcalOut)}</span><span class="q-sub">${k === today ? 'kcal jusqu\'ici' : 'kcal'}</span>` : '<span class="empty">—</span>'}</div>` : ''}
     </div>
     ${S.garminCode ? `<button class="garmin-btn" id="g-sync">⌚ Récupérer pas et poids Garmin<span class="muted">${S.garminLast ? ' · ' + agoText(S.garminLast) : ''}</span></button>` : ''}
     ${MEALS.map(m => {
@@ -530,7 +531,8 @@ async function garminSync(silent, days) {
   garminBusy = true;
   const btn = $('#g-sync'); if (btn) { btn.disabled = true; btn.firstChild.textContent = '⌚ Récupération en cours…'; }
   try {
-    const n = days || (S.garminLast ? Math.min(60, Math.ceil((Date.now() - S.garminLast) / 864e5) + 2) : 30);
+    const full = (S.garminV || 0) < 2;
+    const n = days || (full ? 366 : S.garminLast ? Math.min(60, Math.ceil((Date.now() - S.garminLast) / 864e5) + 2) : 30);
     const r = await fetch(`${RELAY_URL}/garmin?days=${n}`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
     if (r.status === 401) throw new Error('Code Garmin refusé : vérifie-le dans Profil.');
     if (!r.ok) throw new Error('Garmin ne répond pas pour l\'instant. Réessaie plus tard.');
@@ -544,7 +546,7 @@ async function garminSync(silent, days) {
       if (v.kcalOut != null && d.kcalOut !== v.kcalOut) { d.kcalOut = v.kcalOut; d.kcalActive = v.kcalActive ?? null; changed++; }
       cleanDay(k);
     }
-    S.garminLast = Date.now(); save();
+    S.garminLast = Date.now(); if (n >= 366) S.garminV = 2; save();
     garminBusy = false; render();
     if (!silent) toast(changed ? `Garmin : ${changed} valeur${changed > 1 ? 's' : ''} mise${changed > 1 ? 's' : ''} à jour ✓` : 'Garmin : déjà à jour ✓');
   } catch (e) {
@@ -1463,8 +1465,7 @@ function averagesCard() {
       ${tile('⚖️', 'Poids', '#8b5cf6', w.v != null ? fmt(w.v, 1) : '–', w.n, ' kg')}
       ${tile('👟', 'Pas', 'var(--good)', fmt(st.v), st.n, '')}
       ${tile('🔥', 'Kcal', 'var(--carb)', fmt(kc.v), kc.n, '')}
-      ${tile('🥩', 'Protéines', 'var(--prot)', pr.v != null ? fmt(pr.v) : '–', pr.n, ' g')}
-      ${out.n ? tile('⌚', 'Dépensé', 'var(--fat)', fmt(out.v), out.n, '') : ''}
+      ${tile('⌚', 'Dépensé', 'var(--fat)', out.n ? fmt(out.v) : '–', out.n, out.n ? ' kcal' : '')}
       ${bal.n ? tile('⚖️', 'Bilan', bal.v <= 0 ? 'var(--good)' : 'var(--bad)', (bal.v > 0 ? '+' : '') + fmt(bal.v), bal.n, ' kcal') : ''}
     </div>
     <p class="muted small" style="margin:6px 4px 0">Depuis le ${shortDate(rows[rows.length - 1].k)}</p>`;
@@ -1610,7 +1611,7 @@ function renderProfile(app) {
       <h3>⌚ Garmin</h3>
       ${S.garminCode
         ? `<div class="key-ok">✓ Relié à Garmin${S.garminLast ? '<br><span>Dernière récupération ' + agoText(S.garminLast) + '</span>' : ''}</div>
-           <button class="btn" id="g-now">Récupérer maintenant (30 derniers jours)</button>
+           <button class="btn" id="g-now">Récupérer maintenant (toute l'année)</button>
            <label class="toggle"><input type="checkbox" id="g-auto" ${S.garminAuto !== false ? 'checked' : ''}> Récupérer tout seul à l'ouverture de Kalo</label>
            <button class="btn danger" id="g-off">Délier Garmin de ce téléphone</button>`
         : `<p class="muted small" style="margin-top:0">Colle ici ton code Kalo-Garmin pour que Kalo récupère tout seul tes pas et ton poids.</p>
@@ -1713,7 +1714,7 @@ function renderProfile(app) {
     await garminSync(false, 60);
     if (!S.garminLast) { S.garminCode = ''; save(); render(); }
   };
-  if ($('#g-now')) $('#g-now').onclick = () => garminSync(false, 30);
+  if ($('#g-now')) $('#g-now').onclick = () => garminSync(false, 366);
   if ($('#g-auto')) $('#g-auto').onchange = ev => { S.garminAuto = ev.target.checked; save(); };
   if ($('#g-off')) $('#g-off').onclick = () => { if (confirm('Délier Garmin de ce téléphone ?')) { S.garminCode = ''; S.garminLast = 0; save(); render(); } };
   $('#x-exp').onclick = exportBackup;
@@ -1763,7 +1764,7 @@ function renderProfile(app) {
 /* ====================== Démarrage ====================== */
 if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
-const garminAuto = () => { if (S.garminCode && S.garminAuto !== false && Date.now() - (S.garminLast || 0) > 30 * 60e3) garminSync(true); };
+const garminAuto = () => { if (S.garminCode && S.garminAuto !== false && ((S.garminV || 0) < 2 || Date.now() - (S.garminLast || 0) > 30 * 60e3)) garminSync(true); };
 setTimeout(garminAuto, 800);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) garminAuto();
