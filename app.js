@@ -136,19 +136,27 @@ function latestWeight(beforeKey) {
 }
 
 /* ====================== Navigation ====================== */
-const UI = { view: 'jour', date: todayKey(), meal: null };
+const UI = { view: 'jour', date: todayKey(), meal: null, open: new Set(), statMode: 'jour', statRange: 90, statLimit: 31 };
 function go(view) { UI.view = view; render(); window.scrollTo(0, 0); }
 $$('#tabs .tab').forEach(b => b.addEventListener('click', () => go(b.dataset.view)));
 $('#fab').addEventListener('click', () => openAdd());
 
+function renderFavsTab(app) {
+  if (!UI.meal) UI.meal = UI.date === todayKey() ? defaultMeal() : 'midi';
+  app.innerHTML = `<div class="top"><h1>Favoris</h1></div>
+    <p class="muted small" style="margin:-8px 4px 12px">Ajouté à : ${dayLabel(UI.date).toLowerCase()}. Les repas favoris vont dans leur repas habituel.</p>
+    <div id="favtab"></div>`;
+  // Réutilise la feuille Favoris, mais affichée dans la page
+  openFavs(null, $('#favtab', app));
+}
 function render() {
   const app = $('#app');
   if (!S.profile) { $('#tabs').hidden = true; return renderOnboarding(app); }
   $('#tabs').hidden = false;
   $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.view === UI.view));
   if (UI.view === 'jour') renderDay(app);
-  else if (UI.view === 'semaine') renderPeriods(app, 'week');
-  else if (UI.view === 'mois') renderPeriods(app, 'month');
+  else if (UI.view === 'stats') renderStats(app);
+  else if (UI.view === 'favoris') renderFavsTab(app);
   else renderProfile(app);
 }
 
@@ -227,6 +235,10 @@ function ring(val, max, color, inner = '') {
 }
 function macroCard(label, val, target, color, onlyTarget) {
   const left = target - val;
+  if (!onlyTarget) return `<div class="macro"><div class="l2">${label}</div>
+    <div class="v num">${fmt(val)}<small> / ${fmt(target)} g</small></div>
+    <div class="bar"><i style="width:${Math.min(100, target ? val / target * 100 : 0)}%;background:${left < 0 ? 'var(--bad)' : color}"></i></div>
+    <div class="rest ${left < 0 ? 'over' : ''}">${left >= 0 ? fmt(left) + ' g restants' : fmt(-left) + ' g en trop'}</div></div>`;
   return `<div class="macro"><div class="v num">${onlyTarget ? fmt(target) : fmt(Math.abs(left))}<small style="font-size:13px">g</small></div>
     <div class="l">${onlyTarget ? label : (left >= 0 ? label + ' restants' : label + ' en trop')}</div>
     <div class="bar"><i style="width:${Math.min(100, target ? (onlyTarget ? 100 : val / target * 100) : 0)}%;background:${color}"></i></div></div>`;
@@ -267,12 +279,15 @@ function renderDay(app) {
     ${MEALS.map(m => {
       const es = d.entries.filter(e => e.meal === m.id), mt = totals(es);
       const prevEs = es.length ? [] : (S.days[addDays(k, -1)]?.entries || []).filter(e => e.meal === m.id);
-      return `<div class="meal">
-        <div class="meal-head"><div><span class="t">${m.emoji} ${m.name}</span>${es.length ? `<span class="k num">${fmt(mt.kcal)} kcal</span>` : ''}</div>
+      const isOpen = UI.open.has(m.id) && es.length;
+      return `<div class="meal ${isOpen ? 'open' : ''}">
+        <div class="meal-head"><button class="meal-tg" data-toggle="${m.id}" ${es.length ? '' : 'disabled'} aria-expanded="${isOpen ? 'true' : 'false'}">
+            <span class="t">${es.length ? `<i class="chev">›</i>` : ''}${m.emoji} ${m.name}${es.length ? `<span class="k num">${fmt(mt.kcal)} kcal</span>` : ''}</span>
+            ${es.length ? `<span class="mm num"><b style="color:var(--prot)">P</b> ${fmt(mt.p)} · <b style="color:var(--carb)">G</b> ${fmt(mt.c)} · <b style="color:var(--fat)">L</b> ${fmt(mt.f)}<span class="muted"> · ${es.length} aliment${es.length > 1 ? 's' : ''}</span></span>` : ''}</button>
           <div class="meal-btns"><button class="addmini" data-mealmenu="${m.id}" aria-label="Options ${m.name}">⋯</button>
           <button class="addmini" data-addmeal="${m.id}" aria-label="Ajouter à ${m.name}">${ICON.plus}</button></div></div>
         ${prevEs.length ? `<button class="sameas" data-sameas="${m.id}">↺ Comme la veille <span class="muted">· ${prevEs.length} aliment${prevEs.length > 1 ? 's' : ''} · ${fmt(totals(prevEs).kcal)} kcal</span></button>` : ''}
-        ${es.length ? es.map(e => `<div class="swipe" data-swipe="${e.id}"><button class="swipe-del" data-del="${e.id}">Supprimer</button><button class="entry" data-entry="${e.id}">
+        ${isOpen ? es.map(e => `<div class="swipe" data-swipe="${e.id}"><button class="swipe-del" data-del="${e.id}">Supprimer</button><button class="entry" data-entry="${e.id}">
             <span class="thumb">${e.img ? `<img class="thumb" src="${e.img}" alt="">` : srcEmoji(e.source)}</span>
             <span class="info"><span class="n">${esc(e.name)}</span>
               <span class="m num">${e.grams ? fmt(e.grams) + ' g · ' : ''}<span><i class="dot" style="background:var(--prot)"></i>${fmt(e.p)}</span><span><i class="dot" style="background:var(--carb)"></i>${fmt(e.c)}</span><span><i class="dot" style="background:var(--fat)"></i>${fmt(e.f)}</span></span></span>
@@ -294,6 +309,9 @@ function renderDay(app) {
   $('#next').onclick = () => { if (k < maxKey()) { UI.date = addDays(k, 1); render(); } };
   if ($('#go-today')) $('#go-today').onclick = () => { UI.date = today; render(); };
   $$('[data-mealmenu]', app).forEach(b => b.onclick = () => openMealMenu(k, b.dataset.mealmenu));
+  $$('[data-toggle]', app).forEach(b => b.onclick = () => {
+    const id = b.dataset.toggle; UI.open.has(id) ? UI.open.delete(id) : UI.open.add(id); render();
+  });
   $$('[data-sameas]', app).forEach(b => b.onclick = () => {
     const src = (S.days[addDays(k, -1)]?.entries || []).filter(e => e.meal === b.dataset.sameas);
     const ids = copyEntries(src, k);
@@ -320,6 +338,7 @@ function copyEntries(list, toKey, meal) {
   for (const e of list) {
     const id = uid(); ids.push(id);
     day(toKey).entries.push({ ...e, id, time: Date.now(), meal: meal || e.meal });
+    UI.open.add(meal || e.meal);
   }
   save(); return ids;
 }
@@ -337,12 +356,14 @@ function openMealMenu(k, mealId) {
     <div class="list">
       ${es.length ? `<button class="li" id="mm-fav"><span class="info"><span class="n">⭐ Enregistrer comme repas favori</span><span class="m">Pour le remettre en un geste (ex. « Crêpes banane »)</span></span></button>
       <button class="li" id="mm-copy"><span class="info"><span class="n">📋 Copier vers un autre jour</span><span class="m">Demain, la semaine prochaine…</span></span></button>` : ''}
+      <button class="li" id="mm-from"><span class="info"><span class="n">📥 Reprendre d'un autre jour</span><span class="m">Ex. le dîner de jeudi passé</span></span></button>
       <button class="li" id="mm-favs"><span class="info"><span class="n">⭐ Ajouter un de mes repas favoris</span><span class="m">${S.meals.length ? S.meals.length + ' repas enregistré' + (S.meals.length > 1 ? 's' : '') : 'Aucun pour l\'instant'}</span></span></button>
       ${es.length ? `<button class="li" id="mm-clear"><span class="info"><span class="n" style="color:var(--bad)">🗑️ Vider ce repas</span></span></button>` : ''}
     </div>`, sh => {
     if ($('#mm-fav', sh)) $('#mm-fav', sh).onclick = () => openSaveFav(es, m);
     if ($('#mm-copy', sh)) $('#mm-copy', sh).onclick = () => openCopy(k, mealId);
     $('#mm-favs', sh).onclick = () => { UI.date = k; openFavs(mealId); };
+    $('#mm-from', sh).onclick = () => openCopyFrom(k, mealId);
     if ($('#mm-clear', sh)) $('#mm-clear', sh).onclick = () => {
       const d = S.days[k], kept = d.entries.filter(e => e.meal !== mealId), gone = d.entries.filter(e => e.meal === mealId);
       d.entries = kept; cleanDay(k); save(); closeSheet(); render();
@@ -366,8 +387,23 @@ function openSaveFav(es, m) {
     };
   });
 }
+function favsBody(target) {
+  const foods = Object.values(S.foods).filter(f => f.fav).sort((a, b) => (b.uses || 0) - (a.uses || 0));
+  return `
+    <h3 class="fav-h">🍽️ Repas favoris</h3>
+    <div class="list" id="fav-list"></div>
+    <h3 class="fav-h">⭐ Aliments favoris</h3>
+    ${foods.length ? `<div class="list">${foods.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div>`
+      : `<p class="muted small center" style="padding:10px">Touche l'étoile ☆ en haut d'un aliment pour l'ajouter ici.</p>`}`;
+}
+function bindFavFoods(root) {
+  $$('[data-pick^="favfood:"]', root).forEach(b => b.onclick = () => {
+    const f = S.foods[b.dataset.pick.slice(8)];
+    if (f) openFood(f, f.barcode ? 'barcode' : 'search');
+  });
+}
 // fixedMeal : ouvert depuis un repas précis. Sinon chaque favori va dans son repas habituel (sauf choix contraire).
-function openFavs(fixedMeal) {
+function openFavs(fixedMeal, inPage) {
   let target = fixedMeal || '';
   const draw = sh => {
     $('#fav-list', sh).innerHTML = S.meals.length ? S.meals.map(f => {
@@ -388,11 +424,51 @@ function openFavs(fixedMeal) {
       S.meals = S.meals.filter(x => x.id !== b.dataset.favdel); save(); draw(sh);
     });
   };
+  if (inPage) {
+    inPage.innerHTML = favsBody();
+    draw(inPage); bindFavFoods(inPage);
+    return;
+  }
   openSheet(`
-    <h2>⭐ Mes repas</h2>
+    <h2>⭐ Favoris</h2>
     ${UI.date !== todayKey() ? `<p class="muted small" style="margin:-8px 0 12px">Pour : ${dayLabel(UI.date).toLowerCase()}</p>` : ''}
     <div class="chips"><button class="chip ${target ? '' : 'on'}" data-meal="">Son repas habituel</button>${MEALS.map(m => `<button class="chip ${m.id === target ? 'on' : ''}" data-meal="${m.id}">${m.emoji} ${m.name}</button>`).join('')}</div>
-    <div class="list" id="fav-list"></div>`, sh => { bindMealChips(sh, m => (target = m)); draw(sh); });
+    ${favsBody()}`, sh => { bindMealChips(sh, m => { target = m; if (m) UI.meal = m; }); draw(sh); bindFavFoods(sh); });
+}
+function openCopyFrom(k, mealId) {
+  const today = todayKey();
+  const opts = [...new Set([addDays(k, -1), addDays(k, -2), addDays(k, -7), today])].filter(x => x !== k && x <= maxKey());
+  let src = opts[0], srcMeal = mealId;
+  const label = o => o === addDays(k, -7) ? 'Même jour, sem. d\'avant' : dayLabel(o);
+  openSheet(`
+    <h2>📥 Reprendre d'un autre jour</h2>
+    <p class="muted small" style="margin:-8px 0 12px">Vers : ${MEALS.find(m => m.id === mealId).name.toLowerCase()}, ${dayLabel(k).toLowerCase()}</p>
+    <p class="muted small" style="margin:0 4px 6px">Depuis quel jour ?</p>
+    <div class="chips">${opts.map((o, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-from="${o}">${label(o)}</button>`).join('')}</div>
+    <label class="field"><span>Ou choisis une date</span><input class="input" type="date" id="cf-date" max="${maxKey()}" value="${src}"></label>
+    <p class="muted small" style="margin:0 4px 6px">Quel repas de ce jour-là ?</p>
+    <div class="chips" id="cf-meals">${MEALS.map(m => `<button class="chip ${m.id === mealId ? 'on' : ''}" data-srcmeal="${m.id}">${m.emoji} ${m.name}</button>`).join('')}</div>
+    <div id="cf-prev"></div>
+    <button class="btn" id="cf-go">Ajouter ici</button>`, sh => {
+    const dIn = $('#cf-date', sh);
+    const items = () => (S.days[src]?.entries || []).filter(e => e.meal === srcMeal);
+    const upd = () => {
+      const es = items();
+      $('#cf-prev', sh).innerHTML = es.length
+        ? `<div class="list">${es.map(e => `<div class="li"><span class="info"><span class="n">${esc(e.name)}</span><span class="m">${e.grams ? fmt(e.grams) + ' g · ' : ''}${fmt(e.kcal)} kcal</span></span></div>`).join('')}</div>`
+        : `<p class="muted small center" style="padding:10px">Rien de noté dans ce repas ce jour-là.</p>`;
+      $('#cf-go', sh).disabled = !es.length;
+      $('#cf-go', sh).textContent = es.length ? `Ajouter ici (${es.length} aliment${es.length > 1 ? 's' : ''} · ${fmt(totals(es).kcal)} kcal)` : 'Ajouter ici';
+    };
+    $$('[data-from]', sh).forEach(b => b.onclick = () => { src = b.dataset.from; dIn.value = src; $$('[data-from]', sh).forEach(x => x.classList.toggle('on', x === b)); upd(); });
+    dIn.onchange = () => { src = dIn.value; $$('[data-from]', sh).forEach(x => x.classList.toggle('on', x.dataset.from === src)); upd(); };
+    $$('[data-srcmeal]', sh).forEach(b => b.onclick = () => { srcMeal = b.dataset.srcmeal; $$('[data-srcmeal]', sh).forEach(x => x.classList.toggle('on', x === b)); upd(); });
+    upd();
+    $('#cf-go', sh).onclick = () => {
+      const ids = copyEntries(items(), k, mealId);
+      closeSheet(); render(); toast('Ajouté ✓', 'Annuler', () => undoAdd(k, ids));
+    };
+  });
 }
 function openCopy(k, mealId) {
   const es = (S.days[k]?.entries || []).filter(e => !mealId || e.meal === mealId);
@@ -573,7 +649,7 @@ function openAdd(meal) {
       <button class="choice primary" id="c-photo"><span class="ic">${ICON.camera}</span><b>Photo du repas</b><span>L'IA calcule tout</span></button>
       <button class="choice" id="c-barcode"><span class="ic">${ICON.barcode}</span><b>Code-barres</b><span>Scanner un emballage</span></button>
       <button class="choice" id="c-search"><span class="ic">${ICON.search}</span><b>Rechercher</b><span>Taper un aliment</span></button>
-      <button class="choice" id="c-favs"><span class="ic">⭐</span><b>Mes repas</b><span>${S.meals.length ? S.meals.length + ' favori' + (S.meals.length > 1 ? 's' : '') : 'Tes repas habituels'}</span></button>
+      <button class="choice" id="c-favs"><span class="ic">⭐</span><b>Favoris</b><span>Repas et aliments</span></button>
       <button class="choice wide" id="c-body"><span class="ic">${ICON.scale}</span><b>Poids et pas</b><span>${S.days[UI.date]?.weight != null ? 'Poids noté ✓' : 'Pas encore noté'}</span></button>
     </div>
     <button class="btn ghost" id="c-gallery" style="margin-top:12px">🖼️ Choisir une photo déjà prise</button>`, sh => {
@@ -616,9 +692,17 @@ function openBody(focus) {
 
 /* ---------- Ajouter une ligne au journal ---------- */
 function addEntry(e) {
+  UI.open.add(UI.meal || defaultMeal());
   day(UI.date).entries.push({ id: uid(), meal: UI.meal || defaultMeal(), time: Date.now(), ...e,
     kcal: r0(e.kcal), p: r1(e.p), c: r1(e.c), f: r1(e.f) });
   save();
+}
+const foodKey = f => f.key || (f.barcode ? 'b:' + f.barcode : 'n:' + String(f.name || '').toLowerCase().trim());
+function toggleFavFood(f) {
+  const key = foodKey(f), old = S.foods[key];
+  if (old) old.fav = !old.fav;
+  else S.foods[key] = { ...pick100(f), key, uses: 0, last: Date.now(), fav: true };
+  save(); return S.foods[key].fav;
 }
 function rememberFood(f) {
   // f : { name, brand, kcal100, p100, c100, f100, barcode, serving, source }
@@ -632,8 +716,10 @@ function rememberFood(f) {
 function openFood(f, source) {
   const def = f.lastGrams || f.serving || 100;
   const quick = [...new Set([f.serving, 50, 100, 150, 200, 250].filter(Boolean).map(r0))].slice(0, 5);
+  const fkey = foodKey(f);
   openSheet(`
-    <h2 style="margin-bottom:4px">${esc(f.name)}</h2>
+    <div class="food-head"><h2 style="margin-bottom:4px">${esc(f.name)}</h2>
+      <button class="star ${S.foods[fkey]?.fav ? 'on' : ''}" id="f-star" aria-label="Favori">${S.foods[fkey]?.fav ? '★' : '☆'}</button></div>
     <p class="muted small" style="margin:0 0 14px">${f.brand ? esc(f.brand) + ' · ' : ''}pour 100 g : ${fmt(f.kcal100)} kcal</p>
     ${mealChips(UI.meal)}
     <label class="field"><span>Quantité (grammes)</span><input class="input bigin num" id="f-g" inputmode="decimal" value="${r0(def)}"></label>
@@ -641,6 +727,11 @@ function openFood(f, source) {
     <div class="nutri" id="f-n"></div>
     <button class="btn" id="f-add">Ajouter</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
+    $('#f-star', sh).onclick = () => {
+      const on = toggleFavFood(f); const b = $('#f-star', sh);
+      b.classList.toggle('on', on); b.textContent = on ? '★' : '☆';
+      toast(on ? 'Ajouté aux favoris ⭐' : 'Retiré des favoris');
+    };
     const g = $('#f-g', sh);
     const upd = () => {
       const q = num(g.value) || 0, k = q / 100;
@@ -722,7 +813,7 @@ function openSearch(initial = '') {
       const words = norm(t).split(/\s+/).filter(Boolean);
       const mine = Object.values(S.foods)
         .filter(f => !words.length || words.every(w => norm(f.name + ' ' + (f.brand || '')).includes(w)))
-        .sort((a, b) => (b.uses || 0) - (a.uses || 0) || (b.last || 0) - (a.last || 0)).slice(0, t ? 6 : 10);
+        .sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || (b.uses || 0) - (a.uses || 0) || (b.last || 0) - (a.last || 0)).slice(0, t ? 6 : 10);
       base = words.length ? searchBase(words).filter(f => !mine.some(m => m.name === f.name)) : [];
       let h = '';
       if (t) h += `<div class="list"><button class="li" id="s-ai"><span class="ic" style="width:24px">${ICON.spark.replace('<svg', '<svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"')}</span>
@@ -788,7 +879,7 @@ function searchBase(words) {
   return BASE.map(f => [score(f), f]).filter(x => x[0] >= 0).sort((a, b) => b[0] - a[0]).slice(0, 12).map(x => x[1]);
 }
 function foodLi(f, pickId) {
-  return `<button class="li" data-pick="${esc(pickId)}"><span class="info"><span class="n">${esc(f.name)}</span>
+  return `<button class="li" data-pick="${esc(pickId)}"><span class="info"><span class="n">${f.fav ? '<span style="color:#f5b301">★</span> ' : ''}${esc(f.name)}</span>
     <span class="m">${f.brand ? esc(f.brand) + ' · ' : ''}${fmt(f.kcal100)} kcal / 100 g · P ${fmt(f.p100)} · G ${fmt(f.c100)} · L ${fmt(f.f100)}</span></span>
     ${f.lastGrams ? `<span class="tag">${f.lastGrams} g</span>` : ''}</button>`;
 }
@@ -874,11 +965,25 @@ function getDetector() {
     return new m.BarcodeDetector({ formats: BC_FORMATS });
   })().catch(e => { detectorPromise = null; throw e; }));
 }
+// La caméra reste prête 60 s après la fermeture : un 2e scan juste après ne redemande pas l'autorisation.
+let camStream = null, camOff = null;
+async function getCamera() {
+  clearTimeout(camOff);
+  if (camStream && camStream.getVideoTracks().some(t => t.readyState === 'live')) return camStream;
+  camStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+  return camStream;
+}
+function releaseCamera() {
+  clearTimeout(camOff);
+  camOff = setTimeout(() => { camStream?.getTracks().forEach(t => t.stop()); camStream = null; }, 60000);
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && camStream && !document.getElementById('bc-video')) { camStream.getTracks().forEach(t => t.stop()); camStream = null; } });
 function openBarcode() {
   let stream = null, stopped = false, done = false, timer = null;
   const stop = () => {
     stopped = true; clearTimeout(timer);
-    stream?.getTracks().forEach(t => t.stop()); stream = null;
+    const v = document.getElementById('bc-video'); if (v) v.srcObject = null;
+    if (stream) releaseCamera(); stream = null;
   };
   openSheet(`
     <h2>Scanner un code-barres</h2>
@@ -917,7 +1022,7 @@ function openBarcode() {
       try {
         [det, stream] = await Promise.all([
           getDetector(),
-          navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } }),
+          getCamera(),
         ]);
       } catch (e) {
         if (stream) stop();
@@ -1269,56 +1374,116 @@ function delta(metric, cur, prev) {
   if (Math.abs(pct) < 0.05) return '<span class="delta neutral">= 0 %</span>';
   return `<span class="delta ${cls}">${pct > 0 ? '▲ +' : '▼ '}${fmt(pct, 1)} %</span>`;
 }
-function periodTitle(p, type) {
-  if (type === 'week') {
-    const a = dateOf(p.key), b = dateOf(addDays(p.key, 6));
-    const range = a.getMonth() === b.getMonth() ? `${a.getDate()}–${b.getDate()} ${MON[b.getMonth()]}` : `${a.getDate()} ${MON[a.getMonth()]} – ${b.getDate()} ${MON[b.getMonth()]}`;
-    return { t: `Semaine ${isoWeek(p.key)}`, d: range + (b.getFullYear() !== new Date().getFullYear() ? ' ' + b.getFullYear() : '') };
+const ddmm = k => k.slice(8, 10) + '/' + k.slice(5, 7);
+function dayRows() {
+  const today = todayKey();
+  return Object.keys(S.days).filter(k => k <= today).sort().reverse().map(k => {
+    const d = S.days[k], t = d.entries?.length ? totals(d.entries) : null;
+    return { k, steps: d.steps ?? null, kcal: dayKcal(d), weight: d.weight ?? null, p: t ? t.p : null, c: t ? t.c : null, f: t ? t.f : null };
+  }).filter(r => r.steps != null || r.kcal != null || r.weight != null);
+}
+function weightSeries(rangeDays) {
+  const today = todayKey(), from = rangeDays ? addDays(today, -rangeDays) : '0000';
+  return Object.keys(S.days).filter(k => k <= today && k >= from && S.days[k].weight != null).sort().map(k => ({ k, w: S.days[k].weight }));
+}
+function weightCard() {
+  const pts = weightSeries(UI.statRange);
+  const ranges = [[90, '3 mois'], [180, '6 mois'], [0, 'Tout']];
+  const chips = `<div class="seg">${ranges.map(([v, t]) => `<button class="${UI.statRange === v ? 'on' : ''}" data-range="${v}">${t}</button>`).join('')}</div>`;
+  if (pts.length < 2) return `<div class="card"><h3>Poids</h3>${chips}<p class="muted small">La courbe apparaît dès 2 pesées sur la période.</p></div>`;
+  const W = 330, H = 150, px = 34, py = 12;
+  const ws = pts.map(p => p.w), mn = Math.min(...ws), mx = Math.max(...ws), span = Math.max(0.8, mx - mn);
+  const t0 = dateOf(pts[0].k).getTime(), t1 = dateOf(pts[pts.length - 1].k).getTime() || t0 + 1;
+  const x = k => px + (dateOf(k).getTime() - t0) / Math.max(1, t1 - t0) * (W - px - 6);
+  const y = w => py + (1 - (w - mn + span * 0.12) / (span * 1.24)) * (H - py * 2);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.k).toFixed(1)},${y(p.w).toFixed(1)}`).join(' ');
+  // Moyenne mobile 7 jours pour lisser
+  const sm = pts.map((p, i) => { const win = pts.filter(q => q.k <= p.k && q.k > addDays(p.k, -7)); return { k: p.k, w: win.reduce((a, q) => a + q.w, 0) / win.length }; });
+  const smPath = sm.map((p, i) => `${i ? 'L' : 'M'}${x(p.k).toFixed(1)},${y(p.w).toFixed(1)}`).join(' ');
+  const first = pts[0].w, last = pts[pts.length - 1].w, pct = (last - first) / first * 100;
+  const goal = S.profile.goal, good = goal === 'lose' ? pct < 0 : goal === 'gain' ? pct > 0 : Math.abs(pct) <= 1;
+  const ticks = [0, 0.5, 1].map(f => pts[Math.min(pts.length - 1, Math.round(f * (pts.length - 1)))].k);
+  return `<div class="card">
+    <div class="wt-head"><div><div class="muted small">Poids actuel</div><div class="wt-now num">${fmt(last, 1)}<small> kg</small></div></div>
+      <span class="delta ${Math.abs(pct) < 0.05 ? 'neutral' : good ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 1)} %</span></div>
+    ${chips}
+    <svg class="wt-svg" viewBox="0 0 ${W} ${H + 18}">
+      ${[mx, (mx + mn) / 2, mn].map(v => `<line x1="${px}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 4"/><text class="axis" x="0" y="${y(v) + 3}">${fmt(v, 1)}</text>`).join('')}
+      <path d="${path}" fill="none" stroke="var(--muted)" stroke-width="1.2" opacity=".55"/>
+      <path d="${smPath}" fill="none" stroke="#8b5cf6" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+      ${ticks.map((k, i) => `<text class="axis" x="${x(k)}" y="${H + 14}" text-anchor="${i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}">${dateOf(k).getDate()} ${MON[dateOf(k).getMonth()]}</text>`).join('')}
+    </svg>
+    <p class="muted small" style="margin:4px 0 0">Trait violet = moyenne sur 7 jours. Gris = pesées du jour.</p>
+  </div>`;
+}
+function averagesCard() {
+  const rows = dayRows();
+  if (!rows.length) return '';
+  const avg = key => { const v = rows.map(r => r[key]).filter(x => x != null); return { v: v.length ? v.reduce((a, b) => a + b, 0) / v.length : null, n: v.length }; };
+  const w = avg('weight'), st = avg('steps'), kc = avg('kcal'), pr = avg('p');
+  const tile = (ic, lab, col, val, n, unit) => `<div class="avg"><div class="al" style="color:${col}">${ic} ${lab}</div><div class="av num">${val}<small>${unit}</small></div><div class="an">sur ${n} jour${n > 1 ? 's' : ''}</div></div>`;
+  return `<h2 class="st-h">Moyennes · tout l'historique</h2>
+    <div class="avgs">
+      ${tile('⚖️', 'Poids', '#8b5cf6', w.v != null ? fmt(w.v, 1) : '–', w.n, ' kg')}
+      ${tile('👟', 'Pas', 'var(--good)', fmt(st.v), st.n, '')}
+      ${tile('🔥', 'Kcal', 'var(--carb)', fmt(kc.v), kc.n, '')}
+      ${tile('🥩', 'Protéines', 'var(--prot)', pr.v != null ? fmt(pr.v) : '–', pr.n, ' g')}
+    </div>
+    <p class="muted small" style="margin:6px 4px 0">Depuis le ${shortDate(rows[rows.length - 1].k)}</p>`;
+}
+function cls(metric, cur, prev) {
+  if (cur == null || prev == null || !prev) return '';
+  const pct = (cur - prev) / prev * 100; if (Math.abs(pct) < 0.05) return '';
+  const goal = S.profile.goal, T = S.profile.targets.kcal;
+  if (metric === 'steps') return pct > 0 ? 'good' : 'bad';
+  if (metric === 'weight') return goal === 'lose' ? (pct < 0 ? 'good' : 'bad') : goal === 'gain' ? (pct > 0 ? 'good' : 'bad') : (Math.abs(pct) <= 0.5 ? 'good' : 'bad');
+  return Math.abs(cur - T) <= Math.abs(prev - T) ? 'good' : 'bad';
+}
+const pctTxt = (cur, prev) => (cur == null || prev == null || !prev) ? '' : (() => { const p = (cur - prev) / prev * 100; return Math.abs(p) < 0.05 ? '=' : (p > 0 ? '▲' : '▼') + fmt(Math.abs(p), 1) + '%'; })();
+function metricsTable() {
+  const mode = UI.statMode;
+  if (mode === 'jour') {
+    const rows = dayRows(), shown = rows.slice(0, UI.statLimit);
+    if (!rows.length) return '<p class="muted small center">Rien encore.</p>';
+    return `<table class="mt"><thead><tr><th>Date</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-kg">Kg</th></tr></thead><tbody>
+      ${shown.map(r => `<tr><td><b>${ddmm(r.k)}</b><small>${DOW[dateOf(r.k).getDay()]}</small></td><td>${r.steps != null ? fmt(r.steps) : '—'}</td><td>${r.kcal != null ? fmt(r.kcal) : '—'}</td><td>${r.weight != null ? fmt(r.weight, 1) : '—'}</td></tr>`).join('')}
+      </tbody></table>${rows.length > shown.length ? `<button class="btn ghost" id="st-more">Voir plus (${rows.length - shown.length} jours)</button>` : ''}`;
   }
-  const [y, m] = p.key.split('-').map(Number);
-  return { t: MONL[m - 1], d: String(y) };
+  const list = periodStats(mode === 'semaine' ? 'week' : 'month').filter(p => p.kcal != null || p.steps != null || p.weight != null).reverse();
+  if (!list.length) return '<p class="muted small center">Rien encore.</p>';
+  const lab = p => mode === 'semaine' ? `<b>${ddmm(p.key)}</b><small>sem. ${isoWeek(p.key)}</small>` : `<b>${(m => m[0].toUpperCase() + m.slice(1))(MON[Number(p.key.slice(5)) - 1])}</b><small>${p.key.slice(0, 4)}</small>`;
+  const cell = (m, cur, prev, dec) => `<td class="${cls(m, cur, prev)}">${cur != null ? fmt(cur, dec) : '—'}<small>${pctTxt(cur, prev)}</small></td>`;
+  return `<table class="mt"><thead><tr><th>${mode === 'semaine' ? 'Sem. du' : 'Mois'}</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-kg">Kg</th></tr></thead><tbody>
+    ${list.map(p => `<tr>${'<td>' + lab(p) + '</td>'}${cell('steps', p.steps, p.prev?.steps, 0)}${cell('kcal', p.kcal, p.prev?.kcal, 0)}${cell('weight', p.weight, p.prev?.weight, 1)}</tr>`).join('')}
+    </tbody></table>
+    <p class="legend" style="margin-top:8px">Moyennes par jour. Le % compare ${mode === 'semaine' ? 'à la semaine' : 'au mois'} d'avant : vert = bon sens (poids selon ton objectif, plus de pas, calories plus proches de ${fmt(S.profile.targets.kcal)} kcal).</p>`;
 }
-function weightChart(list, type) {
-  const pts = list.filter(p => p.weight != null).slice(-16);
-  if (pts.length < 2) return `<div class="card"><h3>Évolution du poids</h3><p class="muted small" style="margin:0">La courbe apparaît dès que tu as noté ton poids sur 2 ${type === 'week' ? 'semaines' : 'mois'}.</p></div>`;
-  const W = 320, H = 130, px = 28, py = 14;
-  const ws = pts.map(p => p.weight), mn = Math.min(...ws), mx = Math.max(...ws), span = Math.max(0.6, mx - mn);
-  const x = i => px + i * (W - px - 8) / (pts.length - 1), y = w => py + (1 - (w - mn + span * 0.15) / (span * 1.3)) * (H - py * 2);
-  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.weight).toFixed(1)}`).join(' ');
-  const lab = p => type === 'week' ? 'S' + isoWeek(p.key) : MON[Number(p.key.slice(5)) - 1];
-  const first = pts[0].weight, last = pts[pts.length - 1].weight, diff = last - first;
-  return `<div class="card chart"><div style="display:flex;justify-content:space-between;align-items:baseline;padding:0 6px">
-      <h3 style="margin:0">Poids moyen</h3><span class="small ${diff === 0 ? 'muted' : ''}" style="font-weight:650">${diff > 0 ? '+' : ''}${fmt(diff, 1)} kg sur ${pts.length} ${type === 'week' ? 'semaines' : 'mois'}</span></div>
-    <svg viewBox="0 0 ${W} ${H + 16}" preserveAspectRatio="none">
-      <text class="axis" x="0" y="${y(mx) + 3}">${fmt(mx, 1)}</text><text class="axis" x="0" y="${y(mn) + 3}">${fmt(mn, 1)}</text>
-      <path d="${path}" fill="none" stroke="var(--text)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
-      ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.weight)}" r="3.2" fill="var(--card)" stroke="var(--text)" stroke-width="2"/>`).join('')}
-      ${pts.map((p, i) => (i === 0 || i === pts.length - 1 || pts.length <= 8) ? `<text class="axis" x="${x(i)}" y="${H + 14}" text-anchor="middle">${lab(p)}</text>` : '').join('')}
-    </svg></div>`;
-}
-function renderPeriods(app, type) {
-  const list = periodStats(type);
-  const T = S.profile.targets.kcal;
-  const nowKey = periodKey(todayKey(), type);
-  const goalTxt = S.profile.goal === 'lose' ? 'poids en baisse' : S.profile.goal === 'gain' ? 'poids en hausse' : 'poids stable';
+function renderStats(app) {
   app.innerHTML = `
-    <div class="top"><h1>${type === 'week' ? 'Semaines' : 'Mois'}</h1></div>
-    ${!list.length ? `<div class="empty-state">Rien encore. Ajoute ton premier repas avec le bouton <b>+</b>.</div>` : `
-    ${weightChart(list, type)}
-    <p class="legend">Moyennes par jour, comparées ${type === 'week' ? 'à la semaine' : 'au mois'} d'avant. Vert = bon sens : ${goalTxt}, plus de pas, calories plus proches de ton objectif (${fmt(T)} kcal).</p>
-    ${list.slice().reverse().map(p => {
-      const ti = periodTitle(p, type), cur = p.key === nowKey;
-      return `<div class="period">
-        <div class="period-head"><div><b>${ti.t}</b> <span class="d">${ti.d}</span></div>${cur ? `<span class="tag">${type === 'week' ? 'en cours' : 'ce mois'}</span>` : ''}</div>
-        <div class="stats">
-          <div class="stat"><div class="l">Calories / jour</div><div class="v num">${fmt(p.kcal)}</div>${delta('kcal', p.kcal, p.prev?.kcal)}</div>
-          <div class="stat"><div class="l">Pas / jour</div><div class="v num">${fmt(p.steps)}</div>${delta('steps', p.steps, p.prev?.steps)}</div>
-          <div class="stat"><div class="l">Poids moyen</div><div class="v num">${p.weight != null ? fmt(p.weight, 1) + '<small> kg</small>' : '–'}</div>${delta('weight', p.weight, p.prev?.weight)}</div>
-        </div>
-        <div class="foot"><span>${p.days} jour${p.days > 1 ? 's' : ''} de repas notés</span>${p.kcal != null ? `<span>${p.kcal - T > 0 ? '+' : ''}${fmt(p.kcal - T)} kcal/j vs objectif · prot. ${fmt(p.prot)} g/j</span>` : ''}</div>
-      </div>`;
-    }).join('')}`}
-  `;
+    <div class="top"><h1>Statistiques</h1></div>
+    ${weightCard()}
+    ${averagesCard()}
+    <div class="seg big" style="margin-top:18px">${[['jour', 'Jour'], ['semaine', 'Semaine'], ['mois', 'Mois']].map(([v, t]) => `<button class="${UI.statMode === v ? 'on' : ''}" data-mode="${v}">${t}</button>`).join('')}</div>
+    <div class="card" style="padding:12px 10px">${metricsTable()}</div>
+    <button class="btn ghost" id="st-csv">⬇️ Exporter mes données (CSV)</button>`;
+  $$('[data-range]', app).forEach(b => b.onclick = () => { UI.statRange = Number(b.dataset.range); render(); });
+  $$('[data-mode]', app).forEach(b => b.onclick = () => { UI.statMode = b.dataset.mode; UI.statLimit = 31; render(); });
+  if ($('#st-more')) $('#st-more').onclick = () => { UI.statLimit += 60; render(); };
+  $('#st-csv').onclick = exportCSV;
+}
+async function exportCSV() {
+  const rows = Object.keys(S.days).sort().map(k => {
+    const d = S.days[k], t = d.entries?.length ? totals(d.entries) : null;
+    return [k, d.weight ?? '', d.steps ?? '', dayKcal(d) != null ? r0(dayKcal(d)) : '', t ? r1(t.p) : '', t ? r1(t.c) : '', t ? r1(t.f) : '', t ? d.entries.length : 0, k > todayKey() ? 'prevu' : ''];
+  });
+  const csv = 'date,poids_kg,pas,kcal,proteines_g,glucides_g,lipides_g,nb_aliments,note\n' + rows.map(r => r.join(',')).join('\n') + '\n';
+  const name = `kalo-donnees-${todayKey()}.csv`;
+  const file = new File([csv], name, { type: 'text/csv' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Données Kalo' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000); toast('Fichier téléchargé ✓');
 }
 
 /* ====================== Profil ====================== */
@@ -1412,6 +1577,7 @@ function renderProfile(app) {
       <h3>Sauvegarde</h3>
       <p class="muted small" style="margin-top:0">Tes données restent sur ce téléphone. Fais une copie de temps en temps (ou pour passer à un autre téléphone).</p>
       <button class="btn ghost" id="x-exp">Télécharger une copie</button>
+      <button class="btn ghost" id="x-csv2">⬇️ Exporter en CSV (tableur)</button>
       <button class="btn ghost" id="x-imp">Restaurer une copie</button>
       <input type="file" id="x-file" accept="application/json,.json" hidden>
     </div>
@@ -1507,6 +1673,7 @@ function renderProfile(app) {
   if ($('#g-auto')) $('#g-auto').onchange = ev => { S.garminAuto = ev.target.checked; save(); };
   if ($('#g-off')) $('#g-off').onclick = () => { if (confirm('Délier Garmin de ce téléphone ?')) { S.garminCode = ''; S.garminLast = 0; save(); render(); } };
   $('#x-exp').onclick = exportBackup;
+  $('#x-csv2').onclick = exportCSV;
   $('#x-imp').onclick = () => $('#x-file').click();
   $('#x-csv').onclick = () => $('#x-csvfile').click();
   $('#x-csvfile').onchange = async ev => {
@@ -1530,7 +1697,7 @@ function renderProfile(app) {
           if (r.kcal != null) d.kcalImport = r.kcal;
           cleanDay(r.date);
         }
-        save(); closeSheet(); UI.view = 'semaine'; render(); window.scrollTo(0, 0); toast(rows.length + ' jours importés ✓');
+        save(); closeSheet(); UI.view = 'stats'; UI.statMode = 'semaine'; render(); window.scrollTo(0, 0); toast(rows.length + ' jours importés ✓');
       };
     });
   };
