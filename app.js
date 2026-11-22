@@ -36,7 +36,13 @@ function save() {
 function day(k) { return S.days[k] || (S.days[k] = { entries: [] }); }
 function cleanDay(k) {
   const d = S.days[k];
-  if (d && !d.entries.length && d.weight == null && d.steps == null) delete S.days[k];
+  if (d && !d.entries.length && d.weight == null && d.steps == null && d.kcalImport == null) delete S.days[k];
+}
+// Calories d'un jour : les repas notés, sinon le total importé.
+function dayKcal(d) {
+  if (!d) return null;
+  if (d.entries?.length) return totals(d.entries).kcal;
+  return d.kcalImport ?? null;
 }
 
 /* ====================== Dates ====================== */
@@ -218,10 +224,12 @@ function macroCard(label, val, target, color, onlyTarget) {
 }
 function renderDay(app) {
   const k = UI.date, d = S.days[k] || { entries: [] }, T = S.profile.targets, tot = totals(d.entries);
+  const imported = !d.entries.length && d.kcalImport != null;
+  if (imported) tot.kcal = d.kcalImport;
   const left = T.kcal - tot.kcal, today = todayKey();
   const mon = mondayOf(k);
   const strip = Array.from({ length: 7 }, (_, i) => {
-    const dk = addDays(mon, i), dt = dateOf(dk), has = S.days[dk]?.entries?.length;
+    const dk = addDays(mon, i), dt = dateOf(dk), has = dayKcal(S.days[dk]) != null;
     return `<button data-day="${dk}" class="${dk === k ? 'sel' : ''} ${has ? 'has' : ''} ${dk > today ? 'future' : ''}" ${dk > today ? 'disabled' : ''}>${DOW1[dt.getDay()]}<b>${dt.getDate()}</b></button>`;
   }).join('');
   app.innerHTML = `
@@ -256,7 +264,8 @@ function renderDay(app) {
             <span class="kc num">${fmt(e.kcal)}</span></button></div>`).join('') : ''}
       </div>`;
     }).join('')}
-    ${!d.entries.length ? '<p class="center muted small">Appuie sur le bouton <b>+</b> en bas pour ajouter un repas.</p>' : ''}
+    ${imported ? `<div class="card"><h3>📥 Journée importée</h3><p class="muted small" style="margin:0">Total de la journée : <b>${fmt(d.kcalImport)} kcal</b> (sans le détail des repas ni des macros). Si tu ajoutes un repas ce jour-là, ce sont tes repas qui comptent.</p></div>`
+      : !d.entries.length ? '<p class="center muted small">Appuie sur le bouton <b>+</b> en bas pour ajouter un repas.</p>' : ''}
     ${backupDue() ? `<div class="card" style="margin-top:18px"><h3>💾 Copie de sauvegarde</h3>
       <p class="muted small" style="margin-top:0">Tes données sont seulement sur ce téléphone. Garde une copie (dans Fichiers, iCloud ou Google Drive) au cas où tu le perdrais.</p>
       <button class="btn" id="bk-go">Faire une copie</button><button class="btn danger" id="bk-later" style="color:var(--muted)">Plus tard</button></div>` : ''}
@@ -985,6 +994,7 @@ function periodStats(type) {
     const pk = periodKey(k, type);
     const g = groups[pk] || (groups[pk] = { key: pk, kcal: [], steps: [], weight: [], prot: [] });
     if (d.entries?.length) { const t = totals(d.entries); g.kcal.push(t.kcal); g.prot.push(t.p); }
+    else if (d.kcalImport != null) g.kcal.push(d.kcalImport);
     if (d.steps != null) g.steps.push(d.steps);
     if (d.weight != null) g.weight.push(d.weight);
   }
@@ -1069,6 +1079,32 @@ function renderPeriods(app, type) {
 }
 
 /* ====================== Profil ====================== */
+const shortDate = k => { const d = dateOf(k); return `${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}`; };
+function parseHistoryCSV(text) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const sep = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ';' : ',';
+  const split = l => l.split(sep).map(c => c.trim().replace(/^"|"$/g, ''));
+  const head = split(lines[0]).map(h => norm(h));
+  const col = re => head.findIndex(h => re.test(h));
+  const iD = col(/^(date|jour|day)/), iWg = col(/weight_?g|poids_?g/), iW = col(/^(weight|poids)(_?kg)?$/),
+        iS = col(/^(steps|pas)$/), iK = col(/^(kcal|calories|energie|energy)/);
+  if (iD < 0) throw new Error('Pas de colonne « date » dans ce fichier');
+  const n = v => { const x = parseFloat(String(v ?? '').replace(',', '.')); return isNaN(x) ? null : x; };
+  const out = [];
+  for (const l of lines.slice(1)) {
+    const c = split(l);
+    const m = (c[iD] || '').match(/^(\d{4})-(\d{2})-(\d{2})/) || (c[iD] || '').match(/^(\d{2})[./](\d{2})[./](\d{4})/);
+    if (!m) continue;
+    const date = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : `${m[3]}-${m[2]}-${m[1]}`;
+    let w = iWg >= 0 ? n(c[iWg]) : null; if (w != null) w = w / 1000;
+    if (w == null && iW >= 0) { w = n(c[iW]); if (w != null && w > 1000) w = w / 1000; }
+    const st = iS >= 0 ? n(c[iS]) : null, k = iK >= 0 ? n(c[iK]) : null;
+    const r = { date, weight: w != null && w > 25 && w < 350 ? r1(w) : null, steps: st != null ? r0(st) : null, kcal: k ? r0(k) : null };
+    if (r.weight != null || r.steps != null || r.kcal != null) out.push(r);
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
 const PRESETS = [
   { t: 'Équilibré 30/40/30', v: [30, 40, 30] },
   { t: 'Riche en protéines 35/35/30', v: [35, 35, 30] },
@@ -1124,6 +1160,12 @@ function renderProfile(app) {
       <button class="btn ghost" id="x-exp">Télécharger une copie</button>
       <button class="btn ghost" id="x-imp">Restaurer une copie</button>
       <input type="file" id="x-file" accept="application/json,.json" hidden>
+    </div>
+    <div class="card">
+      <h3>Importer un historique</h3>
+      <p class="muted small" style="margin-top:0">Un fichier CSV (export d'une autre app) avec une date par ligne et ton poids, tes pas et/ou tes calories. Tes repas déjà notés ne sont pas touchés.</p>
+      <button class="btn ghost" id="x-csv">📥 Choisir le fichier CSV</button>
+      <input type="file" id="x-csvfile" accept=".csv,text/csv,text/plain" hidden>
     </div>
     <div class="card">
       <h3>Mes infos</h3>
@@ -1202,6 +1244,32 @@ function renderProfile(app) {
   };
   $('#x-exp').onclick = exportBackup;
   $('#x-imp').onclick = () => $('#x-file').click();
+  $('#x-csv').onclick = () => $('#x-csvfile').click();
+  $('#x-csvfile').onchange = async ev => {
+    const f = ev.target.files?.[0]; ev.target.value = ''; if (!f) return;
+    let rows;
+    try { rows = parseHistoryCSV(await f.text()); } catch (e) { return toast(e.message || 'Fichier illisible'); }
+    if (!rows.length) return toast('Aucune ligne utilisable dans ce fichier');
+    const nW = rows.filter(r => r.weight != null).length, nS = rows.filter(r => r.steps != null).length, nK = rows.filter(r => r.kcal != null).length;
+    openSheet(`<h2>Importer l'historique</h2>
+      <p><b>${rows.length} jours</b> trouvés, du ${shortDate(rows[0].date)} au ${shortDate(rows[rows.length - 1].date)} :</p>
+      <div class="nutri" style="grid-template-columns:repeat(3,1fr)"><div><b>${nW}</b><small>poids</small></div><div><b>${nS}</b><small>pas</small></div><div><b>${nK}</b><small>calories</small></div></div>
+      <p class="muted small">Pour ces jours, le poids et les pas remplacent ceux déjà notés. Les calories importées servent seulement les jours où tu n'as pas noté de repas.</p>
+      <button class="btn" id="imp-go">Importer</button>
+      <button class="btn ghost" id="imp-no">Annuler</button>`, sh => {
+      $('#imp-no', sh).onclick = closeSheet;
+      $('#imp-go', sh).onclick = () => {
+        for (const r of rows) {
+          const d = day(r.date);
+          if (r.weight != null) d.weight = r.weight;
+          if (r.steps != null) d.steps = r.steps;
+          if (r.kcal != null) d.kcalImport = r.kcal;
+          cleanDay(r.date);
+        }
+        save(); closeSheet(); UI.view = 'semaine'; render(); window.scrollTo(0, 0); toast(rows.length + ' jours importés ✓');
+      };
+    });
+  };
   $('#x-file').onchange = async ev => {
     const f = ev.target.files?.[0]; if (!f) return;
     try {
