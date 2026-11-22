@@ -987,8 +987,9 @@ function renderProfile(app) {
     </div>
     <div class="card">
       <h3>Analyse des photos par l'IA</h3>
-      <p class="muted small" style="margin-top:0">${S.apiKey ? '✓ Clé enregistrée sur ce téléphone.' : 'Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.'}</p>
-      <input class="input" id="p-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(S.apiKey)}">
+      <p class="muted small" style="margin-top:0">${S.apiKey ? `✓ Clé enregistrée : <b class="num">${esc(S.apiKey.slice(0, 14))}…${esc(S.apiKey.slice(-4))}</b> (${S.apiKey.length} caractères, normalement 108).` : 'Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.'}</p>
+      <input class="input" id="p-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-ant-…" value="">
+      <p class="muted small" style="margin:6px 4px 0">Pour la changer : colle la nouvelle clé ici, puis Enregistrer.</p>
       <button class="btn" id="k-save">Enregistrer la clé</button>
       ${S.apiKey ? '<button class="btn ghost" id="k-test">Tester la clé</button><p class="small center" id="k-res" style="margin:8px 0 0"></p>' : ''}
     </div>
@@ -1038,7 +1039,9 @@ function renderProfile(app) {
     P.goal = goal; P.weight = latestWeight() || P.weight; const kc = computeTargets(P).kcal, pc = readPct(); P.targets = { kcal: kc, ...gramsFrom(kc, pc), pct: pc }; save(); render(); toast('Calories recalculées : ' + fmt(kc) + ' kcal');
   };
   $('#k-save').onclick = () => {
-    const k = $('#p-key').value.replace(/\s+/g, '');
+    // Garde seulement les caractères possibles d'une clé (enlève espaces, guillemets, caractères invisibles).
+    const k = $('#p-key').value.replace(/[^A-Za-z0-9_-]/g, '');
+    if (!k) return toast('Colle ta clé dans le champ');
     if (k && !k.startsWith('sk-ant-')) return toast('Cette clé ne ressemble pas à une clé Anthropic');
     S.apiKey = k; save(); render(); toast(k ? 'Clé enregistrée' : 'Clé effacée');
   };
@@ -1069,6 +1072,7 @@ function renderProfile(app) {
 }
 
 /* ====================== Démarrage ====================== */
+if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
 document.addEventListener('visibilitychange', () => {
   // Si l'app reste ouverte jusqu'au lendemain, revenir sur le bon jour.
