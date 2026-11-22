@@ -331,9 +331,11 @@ function openAdd(meal) {
       <button class="choice" id="c-barcode"><span class="ic">${ICON.barcode}</span><b>Code-barres</b><span>Scanner un emballage</span></button>
       <button class="choice" id="c-search"><span class="ic">${ICON.search}</span><b>Rechercher</b><span>Taper un aliment</span></button>
       <button class="choice" id="c-body"><span class="ic">${ICON.scale}</span><b>Poids et pas</b><span>${S.days[UI.date]?.weight != null ? 'Poids noté ✓' : 'Pas encore noté'}</span></button>
-    </div>`, sh => {
+    </div>
+    <button class="btn ghost" id="c-gallery" style="margin-top:12px">🖼️ Choisir une photo déjà prise</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
-    $('#c-photo', sh).onclick = startPhoto;
+    $('#c-photo', sh).onclick = () => startPhoto(false);
+    $('#c-gallery', sh).onclick = () => startPhoto(true);
     $('#c-barcode', sh).onclick = openBarcode;
     $('#c-search', sh).onclick = () => openSearch();
     $('#c-body', sh).onclick = () => openBody();
@@ -465,21 +467,27 @@ function openSearch(initial = '') {
     <button class="btn ghost" id="s-manual">${ICON.pen} Saisie manuelle</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
     const q = $('#s-q', sh), res = $('#s-res', sh);
+    let base = [];
+    loadBase().then(() => { if (q.value.trim()) q.oninput(); });
     const draw = (remote, loading) => {
       const t = q.value.trim().toLowerCase();
+      const words = norm(t).split(/\s+/).filter(Boolean);
       const mine = Object.values(S.foods)
-        .filter(f => !t || f.name.toLowerCase().includes(t) || (f.brand || '').toLowerCase().includes(t))
-        .sort((a, b) => (b.uses || 0) - (a.uses || 0) || (b.last || 0) - (a.last || 0)).slice(0, t ? 8 : 10);
+        .filter(f => !words.length || words.every(w => norm(f.name + ' ' + (f.brand || '')).includes(w)))
+        .sort((a, b) => (b.uses || 0) - (a.uses || 0) || (b.last || 0) - (a.last || 0)).slice(0, t ? 6 : 10);
+      base = words.length ? searchBase(words).filter(f => !mine.some(m => m.name === f.name)) : [];
       let h = '';
       if (t) h += `<div class="list"><button class="li" id="s-ai"><span class="ic" style="width:24px">${ICON.spark.replace('<svg', '<svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"')}</span>
           <span class="info"><span class="n">Estimer « ${esc(q.value.trim())} » avec l'IA</span><span class="m">Pour un plat maison ou un repas complet</span></span></button></div>`;
       if (mine.length) h += `<p class="muted small" style="margin:14px 4px 8px">${t ? 'Mes aliments' : 'Mes aliments fréquents'}</p>
         <div class="list">${mine.map(f => foodLi(f, 'mine:' + f.key)).join('')}</div>`;
-      if (t) {
-        h += `<p class="muted small" style="margin:14px 4px 8px">Base Open Food Facts</p>`;
-        if (loading) h += `<div class="spinner"></div>`;
-        else if (remote === 'err') h += `<p class="muted small center">Recherche impossible (pas de réseau ?).</p>`;
-        else if (remote && !remote.length) h += `<p class="muted small center">Rien trouvé. Essaie l'IA juste au-dessus.</p>`;
+      if (base.length) h += `<p class="muted small" style="margin:14px 4px 8px">Aliments (base suisse des valeurs nutritives)</p>
+        <div class="list">${base.map((f, i) => foodLi(f, 'base:' + i)).join('')}</div>`;
+      if (t.length >= 2) {
+        h += `<p class="muted small" style="margin:14px 4px 8px">Produits de marque (Open Food Facts)</p>`;
+        if (loading) h += `<div class="spinner" style="width:24px;height:24px;margin:10px auto"></div>`;
+        else if (remote === 'err') h += `<p class="muted small center">Base des marques indisponible pour l'instant.</p>`;
+        else if (remote && !remote.length) h += `<p class="muted small center">Aucun produit de marque trouvé.</p>`;
         else if (remote) h += `<div class="list">${remote.map((f, i) => foodLi(f, 'off:' + i)).join('')}</div>`;
       }
       if (!t && !mine.length) h = `<p class="muted small center" style="padding:16px">Tape le nom d'un aliment. Ceux que tu ajoutes seront gardés ici pour la prochaine fois.</p>`;
@@ -487,7 +495,7 @@ function openSearch(initial = '') {
       if ($('#s-ai', res)) $('#s-ai', res).onclick = () => runAI({ text: q.value.trim() });
       $$('[data-pick]', res).forEach(b => b.onclick = () => {
         const [src, id] = b.dataset.pick.split(/:(.*)/s);
-        const f = src === 'mine' ? S.foods[id] : remote[Number(id)];
+        const f = src === 'mine' ? S.foods[id] : src === 'base' ? base[Number(id)] : remote[Number(id)];
         openFood(f, f.source === 'barcode' ? 'barcode' : 'search');
       });
     };
@@ -495,9 +503,11 @@ function openSearch(initial = '') {
       clearTimeout(timer); ctrl?.abort(); draw(null, false);
       const t = q.value.trim(); if (t.length < 2) return;
       timer = setTimeout(async () => {
-        draw(null, true); ctrl = new AbortController();
-        try { draw(await offSearch(t, ctrl.signal), false); }
-        catch (err) { if (err.name !== 'AbortError') draw('err', false); }
+        draw(null, true); const c = (ctrl = new AbortController()); let late = false;
+        const tid = setTimeout(() => { late = true; c.abort(); }, 9000);
+        try { draw(await offSearch(t, c.signal), false); }
+        catch (err) { if (late || err.name !== 'AbortError') draw('err', false); }
+        finally { clearTimeout(tid); }
       }, 550);
     };
     q.addEventListener('keydown', ev => { if (ev.key === 'Enter') q.blur(); });
@@ -506,6 +516,28 @@ function openSearch(initial = '') {
     $('#s-manual', sh).onclick = () => openManual(q.value.trim());
     return () => { clearTimeout(timer); ctrl?.abort(); };
   });
+}
+/* ---------- Base suisse des valeurs nutritives (OSAV, naehrwertdaten.ch), dans l'app ---------- */
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/œ/g, 'oe');
+let BASE = null;
+function loadBase() {
+  if (BASE) return Promise.resolve(BASE);
+  return fetch('aliments.json').then(r => r.json()).then(rows => (BASE = rows.map(([name, syn, kcal, p, c, f]) => ({
+    name, brand: '', kcal100: kcal, p100: p, c100: c, f100: f, source: 'search', _n: norm(name + ' ' + syn), _h: norm(name.split(',')[0]),
+  })))).catch(() => (BASE = []));
+}
+function searchBase(words) {
+  if (!BASE) return [];
+  const score = f => {
+    let s = 0;
+    for (const w of words) {
+      if (!f._n.includes(w)) return -1;
+      if (f._h.startsWith(w)) s += 3; else if (new RegExp('(^|[^a-z])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(f._n)) s += 2; else s += 1;
+    }
+    if (/\bcru(e)?\b/.test(f._n)) s += 0.5;          // l'aliment de base avant ses préparations
+    return s - f.name.length / 200;
+  };
+  return BASE.map(f => [score(f), f]).filter(x => x[0] >= 0).sort((a, b) => b[0] - a[0]).slice(0, 12).map(x => x[1]);
 }
 function foodLi(f, pickId) {
   return `<button class="li" data-pick="${esc(pickId)}"><span class="info"><span class="n">${esc(f.name)}</span>
@@ -577,6 +609,13 @@ function loadScript(src) {
     const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s);
   });
 }
+// Vérifie le chiffre de contrôle du code-barres : évite les fausses lectures.
+function validEAN(c) {
+  if (![8, 12, 13].includes(c.length)) return false;
+  const d = c.padStart(13, '0').split('').map(Number), chk = d.pop();
+  const sum = d.reduce((a, n, i) => a + n * (i % 2 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === chk;
+}
 function openBarcode() {
   let scanner = null, done = false;
   const stop = () => {
@@ -587,7 +626,7 @@ function openBarcode() {
   openSheet(`
     <h2>Scanner un code-barres</h2>
     <div id="reader"></div>
-    <p class="muted small center" id="bc-msg">Place le code-barres dans le cadre.</p>
+    <p class="muted small center" id="bc-msg">Tiens le téléphone à 15-20 cm, code-barres à l'horizontale, bien éclairé.</p>
     <div class="row2" style="grid-template-columns:1fr auto;margin-top:10px">
       <input class="input num" id="bc-in" inputmode="numeric" placeholder="ou tape les chiffres">
       <button class="btn" id="bc-go" style="margin:0;width:auto;padding:0 18px">OK</button>
@@ -612,9 +651,14 @@ function openBarcode() {
     loadScript(QR_URL).then(() => {
       if (!document.getElementById('reader')) return;
       const F = window.Html5QrcodeSupportedFormats;
-      scanner = new window.Html5Qrcode('reader', { formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E], verbose: false });
-      scanner.start({ facingMode: 'environment' }, { fps: 12, qrbox: { width: 260, height: 140 }, aspectRatio: 1.4 },
-        text => lookup(text.replace(/\D/g, '')), () => {})
+      // Lecteur natif du téléphone si disponible (Android), sinon lecteur JS ; image HD et mise au point continue.
+      scanner = new window.Html5Qrcode('reader', { formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E], verbose: false,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
+      scanner.start({ facingMode: 'environment' }, {
+        fps: 25, disableFlip: true, aspectRatio: 1.333,
+        qrbox: (w, h) => ({ width: Math.floor(w * 0.9), height: Math.max(80, Math.floor(h * 0.55)) }),
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
+      }, text => { const c = text.replace(/\D/g, ''); if (validEAN(c)) { navigator.vibrate?.(60); lookup(c); } }, () => {})
         .catch(() => { scanner = null; $('#reader', sh).style.display = 'none'; msg.textContent = 'Caméra non disponible : autorise la caméra, ou tape le numéro sous le code-barres.'; });
     }).catch(() => { msg.textContent = 'Le scanner n\'a pas pu se charger (réseau). Tape le numéro.'; });
     return stop;
@@ -622,18 +666,29 @@ function openBarcode() {
 }
 
 /* ====================== IA (photo et texte) ====================== */
-function startPhoto() {
+// Les deux champs photo (appareil photo / galerie) sont écoutés une seule fois, au démarrage.
+async function onPhotoFile(ev) {
+  const inp = ev.target, file = inp.files?.[0];
+  if (!file) return;
+  openSheet(`<h2>Photo reçue</h2><div class="spinner"></div><p class="center muted">Préparation de la photo…</p>`);
+  try {
+    const { b64, thumb } = await shrink(file);
+    inp.value = '';
+    runAI({ image: b64, thumb });
+  } catch (e) {
+    inp.value = '';
+    showError('Impossible de lire cette photo. Essaie de la reprendre.', e);
+  }
+}
+['#photo-input', '#photo-pick'].forEach(id => $(id).addEventListener('change', onPhotoFile));
+function startPhoto(gallery) {
   if (!S.apiKey) return askKey();
-  const inp = $('#photo-input');
-  inp.value = '';
-  inp.onchange = async () => {
-    const file = inp.files?.[0]; if (!file) return;
-    try {
-      const { b64, thumb } = await shrink(file);
-      runAI({ image: b64, thumb });
-    } catch { toast('Impossible de lire cette photo'); }
-  };
-  inp.click();
+  $(gallery ? '#photo-pick' : '#photo-input').click();
+}
+function showError(msg, err) {
+  const detail = err ? [err.status, err.error?.error?.message || err.message || String(err)].filter(Boolean).join(' · ') : '';
+  openSheet(`<h2>Oups</h2><p>${esc(msg)}</p>${detail ? `<p class="err-detail">Détail : ${esc(detail).slice(0, 300)}</p>` : ''}
+    <button class="btn" id="x-ok">OK</button>`, sh => { $('#x-ok', sh).onclick = closeSheet; });
 }
 function askKey() {
   openSheet(`
@@ -655,7 +710,7 @@ function shrink(file) {
         const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
         c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); return c;
       };
-      const big = draw(1280).toDataURL('image/jpeg', 0.85).split(',')[1];
+      const big = draw(1024).toDataURL('image/jpeg', 0.82).split(',')[1];
       const thumb = draw(160).toDataURL('image/jpeg', 0.7);
       URL.revokeObjectURL(url); ok({ b64: big, thumb });
     };
@@ -690,19 +745,33 @@ Règles :
 - meal_name : un nom court pour le repas entier (ex. « Bowl poulet riz »).
 - Si ce n'est pas de la nourriture, mets is_food à false et items vide.`;
 
-async function callClaude(content) {
-  const { default: Anthropic } = await import(SDK_URL);
-  const client = new Anthropic({ apiKey: S.apiKey, dangerouslyAllowBrowser: true });
+let sdkPromise = null;
+const loadSDK = () => (sdkPromise ||= import(SDK_URL).catch(e => { sdkPromise = null; throw Object.assign(e, { stage: 'sdk' }); }));
+async function callClaude(content, maxTokens = 16000) {
+  const { default: Anthropic } = await loadSDK();
+  const client = new Anthropic({ apiKey: S.apiKey, dangerouslyAllowBrowser: true, timeout: 120000, maxRetries: 1 });
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: maxTokens,
     output_config: { effort: 'low', format: { type: 'json_schema', schema: AI_SCHEMA } },
     messages: [{ role: 'user', content }],
   });
   if (msg.stop_reason === 'refusal') throw Object.assign(new Error('refus'), { code: 'refusal' });
   const txt = msg.content.find(b => b.type === 'text')?.text;
-  if (!txt) throw new Error('vide');
+  if (!txt) throw new Error('Réponse vide (' + msg.stop_reason + ')');
   return JSON.parse(txt);
+}
+function aiErrorText(err) {
+  const s = err?.status, m = (err?.error?.error?.message || err?.message || '');
+  if (err?.stage === 'sdk') return "Le module IA n'a pas pu se charger (connexion internet ?).";
+  if (s === 401) return 'Clé IA refusée : vérifie-la dans Profil (sans espace avant ou après).';
+  if (s === 403) return "Cette clé n'a pas le droit d'utiliser l'IA (vérifie l'espace de travail de la clé).";
+  if (/credit|balance|billing/i.test(m)) return 'Plus de crédit sur ton compte IA (platform.claude.com → Billing).';
+  if (s === 429) return "Trop de demandes d'un coup. Réessaie dans une minute.";
+  if (s === 529 || s >= 500) return 'Le service IA est surchargé. Réessaie dans un instant.';
+  if (err?.code === 'refusal') return "L'IA n'a pas voulu analyser cette image.";
+  if (/timeout|timed out/i.test(m)) return "L'IA a mis trop de temps. Réessaie.";
+  return "L'analyse n'a pas marché.";
 }
 
 async function runAI({ image, thumb, text }) {
@@ -710,8 +779,11 @@ async function runAI({ image, thumb, text }) {
   const meal = UI.meal;
   openSheet(`
     <h2>${image ? 'Analyse de la photo' : 'Estimation par l\'IA'}</h2>
-    ${thumb ? `<img class="photo-prev" src="data:image/jpeg;base64,${image}" alt="">` : ''}
-    <div class="spinner"></div><p class="center muted">L'IA regarde ${image ? 'ton assiette' : '« ' + esc(text) + ' »'}…</p>`);
+    ${thumb ? `<img class="photo-prev" src="${thumb}" alt="" style="max-height:160px">` : ''}
+    <div class="spinner"></div><p class="center muted">L'IA regarde ${image ? 'ton assiette' : '« ' + esc(text) + ' »'}…</p>
+    <p class="center muted small" id="ai-wait">Ça prend en général 10 à 30 secondes.</p>`);
+  const t0 = Date.now();
+  const tick = setInterval(() => { const w = $('#ai-wait'); if (w) w.textContent = `${Math.round((Date.now() - t0) / 1000)} s… ça prend en général 10 à 30 secondes.`; }, 1000);
   let res;
   try {
     const content = image
@@ -719,15 +791,11 @@ async function runAI({ image, thumb, text }) {
       : [{ type: 'text', text: AI_PROMPT + `\n\nRepas décrit par l'utilisateur (pas de photo) : « ${text} ». Si aucune quantité n'est donnée, prends une portion normale pour un adulte.` }];
     res = await callClaude(content);
   } catch (err) {
-    const s = err?.status;
-    const m = s === 401 ? 'Clé IA refusée : vérifie-la dans Profil.'
-      : s === 400 && /credit|balance/i.test(err?.message || '') ? 'Plus de crédit sur ton compte IA.'
-      : s === 429 ? 'Trop de demandes d\'un coup. Réessaie dans une minute.'
-      : err?.code === 'refusal' ? 'L\'IA n\'a pas voulu analyser cette image.'
-      : 'L\'analyse n\'a pas marché (réseau ?). Réessaie.';
-    openSheet(`<h2>Oups</h2><p>${m}</p><button class="btn" id="x-ok">OK</button>`, sh => { $('#x-ok', sh).onclick = closeSheet; });
+    clearInterval(tick);
+    showError(aiErrorText(err), err);
     return;
   }
+  clearInterval(tick);
   if (!res.is_food || !res.items?.length) {
     openSheet(`<h2>Pas de nourriture trouvée</h2><p class="muted">Essaie une photo plus nette, prise d'au-dessus, ou utilise la recherche.</p>
       <button class="btn" id="x-ok">OK</button>`, sh => { $('#x-ok', sh).onclick = closeSheet; });
@@ -882,19 +950,38 @@ function renderPeriods(app, type) {
 }
 
 /* ====================== Profil ====================== */
+const PRESETS = [
+  { t: 'Équilibré 30/40/30', v: [30, 40, 30] },
+  { t: 'Riche en protéines 35/35/30', v: [35, 35, 30] },
+  { t: 'Endurance 20/55/25', v: [20, 55, 25] },
+  { t: 'Pauvre en glucides 30/20/50', v: [30, 20, 50] },
+];
+function pctOf(T) {
+  if (T.pct) return { ...T.pct };
+  const k = T.p * 4 + T.c * 4 + T.f * 9 || 1;
+  const p = Math.round(T.p * 4 / k * 100), f = Math.round(T.f * 9 / k * 100);
+  return { p, c: 100 - p - f, f };
+}
+const gramsFrom = (kcal, pct) => ({ p: Math.round(kcal * pct.p / 100 / 4), c: Math.round(kcal * pct.c / 100 / 4), f: Math.round(kcal * pct.f / 100 / 9) });
 function renderProfile(app) {
-  const P = S.profile, T = P.targets;
+  const P = S.profile, T = P.targets, pct = pctOf(T);
   app.innerHTML = `
     <div class="top"><h1>Profil</h1></div>
     <div class="card">
       <h3>Objectif par jour</h3>
-      <div class="row4">
-        <label class="field"><span>kcal</span><input class="input num" id="t-k" inputmode="numeric" value="${T.kcal}"></label>
-        <label class="field"><span>Prot. g</span><input class="input num" id="t-p" inputmode="numeric" value="${T.p}"></label>
-        <label class="field"><span>Gluc. g</span><input class="input num" id="t-c" inputmode="numeric" value="${T.c}"></label>
-        <label class="field"><span>Lip. g</span><input class="input num" id="t-f" inputmode="numeric" value="${T.f}"></label>
-      </div>
-      <div class="chips" style="padding-bottom:6px">${GOALS.map(g => `<button class="chip ${P.goal === g.v ? 'on' : ''}" data-goal="${g.v}">${g.t}</button>`).join('')}</div>
+      <label class="field"><span>Calories par jour</span><input class="input bigin num" id="t-k" inputmode="numeric" value="${T.kcal}"></label>
+      <p class="muted small" style="margin:4px 4px 8px">Répartition des macros</p>
+      <div class="chips" style="padding-bottom:10px">${PRESETS.map(pr => `<button class="chip" data-preset="${pr.v.join(',')}">${pr.t}</button>`).join('')}</div>
+      ${[['p', 'Protéines', 'var(--prot)'], ['c', 'Glucides', 'var(--carb)'], ['f', 'Lipides', 'var(--fat)']].map(([k, l, col]) => `
+        <div class="pct-row">
+          <span class="pct-name"><i class="dot" style="background:${col}"></i>${l}</span>
+          <button class="pct-btn" data-step="${k}:-5" aria-label="${l} moins 5 %">−</button>
+          <span class="pct-in"><input class="input num" id="pc-${k}" inputmode="numeric" value="${pct[k]}"><b>%</b></span>
+          <button class="pct-btn" data-step="${k}:5" aria-label="${l} plus 5 %">+</button>
+          <span class="pct-g num" id="pg-${k}"></span>
+        </div>`).join('')}
+      <div id="pct-total" class="pct-total"></div>
+      <div class="chips" style="padding:10px 0 6px">${GOALS.map(g => `<button class="chip ${P.goal === g.v ? 'on' : ''}" data-goal="${g.v}">${g.t}</button>`).join('')}</div>
       <button class="btn" id="t-save">Enregistrer</button>
       <button class="btn ghost" id="t-recalc">Recalculer avec mon poids actuel</button>
     </div>
@@ -903,6 +990,7 @@ function renderProfile(app) {
       <p class="muted small" style="margin-top:0">${S.apiKey ? '✓ Clé enregistrée sur ce téléphone.' : 'Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.'}</p>
       <input class="input" id="p-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(S.apiKey)}">
       <button class="btn" id="k-save">Enregistrer la clé</button>
+      ${S.apiKey ? '<button class="btn ghost" id="k-test">Tester la clé</button><p class="small center" id="k-res" style="margin:8px 0 0"></p>' : ''}
     </div>
     <div class="card">
       <h3>Sauvegarde</h3>
@@ -919,18 +1007,49 @@ function renderProfile(app) {
     <p class="center muted small">Kalo · usage personnel</p>`;
   let goal = P.goal;
   $$('[data-goal]', app).forEach(b => b.onclick = () => { goal = b.dataset.goal; $$('[data-goal]', app).forEach(x => x.classList.toggle('on', x === b)); });
+  const kIn = $('#t-k');
+  const readPct = () => ({ p: r0(num($('#pc-p').value) || 0), c: r0(num($('#pc-c').value) || 0), f: r0(num($('#pc-f').value) || 0) });
+  const updPct = () => {
+    const kc = r0(num(kIn.value) || 0), pc = readPct(), g = gramsFrom(kc, pc), sum = pc.p + pc.c + pc.f;
+    ['p', 'c', 'f'].forEach(k => ($('#pg-' + k).textContent = `${fmt(g[k])} g`));
+    const ok = sum === 100;
+    $('#pct-total').className = 'pct-total ' + (ok ? 'ok' : 'ko');
+    $('#pct-total').textContent = ok ? 'Total 100 % ✓' : `Total ${sum} % : ${sum < 100 ? 'il manque ' + (100 - sum) + ' %' : 'il y a ' + (sum - 100) + ' % de trop'}. Ajuste pour arriver à 100 %.`;
+    $('#t-save').disabled = !ok || kc < 800;
+    $$('[data-preset]', app).forEach(b => b.classList.toggle('on', b.dataset.preset === [pc.p, pc.c, pc.f].join(',')));
+  };
+  kIn.oninput = updPct;
+  ['p', 'c', 'f'].forEach(k => ($('#pc-' + k).oninput = updPct));
+  $$('[data-step]', app).forEach(b => b.onclick = () => {
+    const [k, d] = b.dataset.step.split(':'); const i = $('#pc-' + k);
+    i.value = Math.max(0, Math.min(100, (r0(num(i.value)) || 0) + Number(d))); updPct();
+  });
+  $$('[data-preset]', app).forEach(b => b.onclick = () => {
+    const [p, c, f] = b.dataset.preset.split(',');
+    $('#pc-p').value = p; $('#pc-c').value = c; $('#pc-f').value = f; updPct();
+  });
+  updPct();
   $('#t-save').onclick = () => {
-    const v = id => r0(num($(id).value));
-    P.goal = goal; P.targets = { kcal: v('#t-k') || T.kcal, p: v('#t-p') || 0, c: v('#t-c') || 0, f: v('#t-f') || 0 };
+    const kc = r0(num(kIn.value)), pc = readPct();
+    P.goal = goal; P.targets = { kcal: kc, ...gramsFrom(kc, pc), pct: pc };
     save(); toast('Objectif enregistré'); render();
   };
   $('#t-recalc').onclick = () => {
-    P.goal = goal; P.weight = latestWeight() || P.weight; P.targets = computeTargets(P); save(); render(); toast('Objectif recalculé');
+    P.goal = goal; P.weight = latestWeight() || P.weight; const kc = computeTargets(P).kcal, pc = readPct(); P.targets = { kcal: kc, ...gramsFrom(kc, pc), pct: pc }; save(); render(); toast('Calories recalculées : ' + fmt(kc) + ' kcal');
   };
   $('#k-save').onclick = () => {
-    const k = $('#p-key').value.trim();
+    const k = $('#p-key').value.replace(/\s+/g, '');
     if (k && !k.startsWith('sk-ant-')) return toast('Cette clé ne ressemble pas à une clé Anthropic');
     S.apiKey = k; save(); render(); toast(k ? 'Clé enregistrée' : 'Clé effacée');
+  };
+  if ($('#k-test')) $('#k-test').onclick = async () => {
+    const b = $('#k-test'), out = $('#k-res'); b.disabled = true; out.textContent = 'Test en cours… (10 à 20 s)';
+    try {
+      const r = await callClaude([{ type: 'text', text: AI_PROMPT + '\n\nRepas décrit : « une pomme moyenne ». ' }], 4000);
+      out.innerHTML = `<span style="color:var(--good);font-weight:650">✓ La clé marche.</span> <span class="muted">(une pomme ≈ ${fmt(r.items?.[0]?.kcal)} kcal)</span>`;
+    } catch (e) {
+      out.innerHTML = `<span style="color:var(--bad);font-weight:650">${esc(aiErrorText(e))}</span><br><span class="err-detail" style="display:inline-block;margin-top:6px">${esc([e.status, e.error?.error?.message || e.message].filter(Boolean).join(' · ')).slice(0, 300)}</span>`;
+    } finally { b.disabled = false; }
   };
   $('#x-exp').onclick = exportBackup;
   $('#x-imp').onclick = () => $('#x-file').click();
