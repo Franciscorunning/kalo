@@ -390,6 +390,23 @@ function openSaveFav(es, m) {
     };
   });
 }
+function dayChips() {
+  const t = todayKey(), opts = [addDays(t, -1), t, addDays(t, 1)];
+  return `<p class="muted small" style="margin:0 4px 6px">Quel jour ?</p><div class="chips" style="padding-bottom:8px">${opts.map(o => `<button class="chip ${o === UI.date ? 'on' : ''}" data-wday="${o}">${dayLabel(o)}</button>`).join('')}
+    <label class="chip date-chip ${opts.includes(UI.date) ? '' : 'on'}">📅 <input type="date" id="w-date" value="${UI.date}" max="${maxKey()}"></label></div>
+    <p class="muted small" style="margin:0 4px 6px">Quel repas ?</p>`;
+}
+function bindDayChips(root) {
+  $$('[data-wday]', root).forEach(b => b.onclick = () => {
+    UI.date = b.dataset.wday; $$('[data-wday]', root).forEach(x => x.classList.toggle('on', x === b));
+    $('.date-chip', root).classList.remove('on'); $('#w-date', root).value = UI.date;
+  });
+  $('#w-date', root).onchange = ev => {
+    if (!ev.target.value) return; UI.date = ev.target.value;
+    $$('[data-wday]', root).forEach(x => x.classList.toggle('on', x.dataset.wday === UI.date));
+    $('.date-chip', root).classList.toggle('on', !$$('[data-wday]', root).some(x => x.dataset.wday === UI.date));
+  };
+}
 function whereBlock(target) {
   const t = todayKey(), opts = [addDays(t, -1), t, addDays(t, 1)];
   return `<div class="where">
@@ -423,7 +440,7 @@ function bindFavFoods(root, getTarget) {
   $$('[data-pick^="favfood:"]', root).forEach(b => b.onclick = () => {
     const f = S.foods[b.dataset.pick.slice(8)];
     UI.meal = (getTarget && getTarget()) || f?.lastMeal || (UI.date === todayKey() ? defaultMeal() : 'midi');
-    if (f) openFood(f, f.barcode ? 'barcode' : 'search');
+    if (f) openFood(f, f.barcode ? 'barcode' : 'search', { withDay: true });
   });
 }
 // fixedMeal : ouvert depuis un repas précis. Sinon chaque favori va dans son repas habituel (sauf choix contraire).
@@ -433,30 +450,92 @@ function openFavs(fixedMeal, inPage) {
     $('#fav-list', sh).innerHTML = S.meals.length ? S.meals.map(f => {
       const t = totals(f.items);
       return `<div class="fav-row"><button class="li" data-fav="${f.id}"><span class="info"><span class="n">${esc(f.name)}</span>
-        <span class="m">${f.items.length} aliment${f.items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</span></span><span class="tag">Ajouter</span></button>
-        <button class="fav-del" data-favdel="${f.id}" aria-label="Supprimer ${esc(f.name)}">🗑️</button></div>`;
+        <span class="m">${MEALS.find(m => m.id === f.meal)?.emoji || ''} ${f.items.length} aliment${f.items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</span></span><span class="chev-r">›</span></button>
+        <button class="fav-del" data-favedit="${f.id}" aria-label="Modifier ${esc(f.name)}">✏️</button></div>`;
     }).join('') : `<p class="muted small center" style="padding:14px">Pas encore de repas favori.<br>Note ton repas une fois (ex. tes crêpes), puis touche <b>⋯</b> à côté du repas → <b>Enregistrer comme repas favori</b>.</p>`;
-    $$('[data-fav]', sh).forEach(b => b.onclick = () => {
-      const f = S.meals.find(x => x.id === b.dataset.fav);
-      const k = UI.date, ids = copyEntries(f.items, k, target || f.meal);
-      f.used = (f.used || 0) + 1; save();
-      closeSheet(); UI.view = 'jour'; render();
-      toast('« ' + f.name + ' » ajouté · ' + dayLabel(k).toLowerCase() + ' ✓', 'Annuler', () => undoAdd(k, ids));
-    });
-    $$('[data-favdel]', sh).forEach(b => b.onclick = () => {
-      if (!confirm('Supprimer ce repas favori ?')) return;
-      S.meals = S.meals.filter(x => x.id !== b.dataset.favdel); save(); draw(sh);
-    });
+    $$('[data-fav]', sh).forEach(b => b.onclick = () => openFavMeal(b.dataset.fav, target));
+    $$('[data-favedit]', sh).forEach(b => b.onclick = () => openFavEditor(b.dataset.favedit));
   };
   if (inPage) {
-    inPage.innerHTML = whereBlock(target) + favsBody();
-    bindWhere(inPage, m => (target = m)); draw(inPage); bindFavFoods(inPage, () => target);
+    inPage.innerHTML = favsBody();
+    draw(inPage); bindFavFoods(inPage, () => target);
     return;
   }
   openSheet(`
     <h2>⭐ Favoris</h2>
-    ${whereBlock(target)}
-    ${favsBody()}`, sh => { bindWhere(sh, m => (target = m)); draw(sh); bindFavFoods(sh, () => target); });
+    <p class="muted small" style="margin:-8px 0 8px">Touche un repas ou un aliment pour choisir le jour et le repas.</p>
+    ${favsBody()}`, sh => { draw(sh); bindFavFoods(sh, () => target); });
+}
+function openFavMeal(id, presetMeal) {
+  const f = S.meals.find(x => x.id === id); if (!f) return;
+  const t = totals(f.items);
+  let meal = presetMeal || f.meal || 'midi';
+  openSheet(`
+    <h2 style="margin-bottom:4px">⭐ ${esc(f.name)}</h2>
+    <p class="muted small" style="margin:0 0 12px">${f.items.length} aliment${f.items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</p>
+    <div class="list">${f.items.map(e => `<div class="li"><span class="info"><span class="n">${esc(e.name)}</span><span class="m">${e.grams ? fmt(e.grams) + ' g · ' : ''}${fmt(e.kcal)} kcal</span></span></div>`).join('')}</div>
+    ${dayChips()}
+    ${mealChips(meal)}
+    <button class="btn" id="fm-add">Ajouter</button>
+    <button class="btn ghost" id="fm-edit">✏️ Modifier ce repas favori</button>`, sh => {
+    bindDayChips(sh);
+    bindMealChips(sh, m => (meal = m));
+    $('#fm-edit', sh).onclick = () => openFavEditor(id);
+    $('#fm-add', sh).onclick = () => {
+      const k = UI.date, ids = copyEntries(f.items, k, meal);
+      f.used = (f.used || 0) + 1; save();
+      closeSheet(); UI.view = 'jour'; render();
+      toast('« ' + f.name + ' » ajouté · ' + dayLabel(k).toLowerCase() + ' ✓', 'Annuler', () => undoAdd(k, ids));
+    };
+  });
+}
+// Change la quantité d'un aliment d'un repas favori (règle de trois, ou valeurs pour 100 g si on les a).
+function scaleItem(e, grams) {
+  const p = e.per100, r = p ? grams / 100 : (e.grams ? grams / e.grams : 1);
+  if (p) return { ...e, grams: r0(grams), kcal: r0(p.kcal100 * r), p: r1(p.p100 * r), c: r1(p.c100 * r), f: r1(p.f100 * r) };
+  return { ...e, grams: r0(grams), kcal: r0(e.kcal * r), p: r1(e.p * r), c: r1(e.c * r), f: r1(e.f * r) };
+}
+function openFavEditor(id) {
+  const f = S.meals.find(x => x.id === id); if (!f) return;
+  const items = f.items.map(e => ({ ...e }));
+  let meal = f.meal || 'midi';
+  const draw = sh => {
+    const t = totals(items);
+    $('#fe-tot', sh).textContent = `${items.length} aliment${items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}`;
+    $('#fe-list', sh).innerHTML = items.length ? items.map((e, i) => `
+      <div class="fe-row">
+        <div class="info"><div class="n">${esc(e.name)}</div><div class="m num" data-fesum="${i}">${fmt(e.kcal)} kcal · P ${fmt(e.p)} · G ${fmt(e.c)} · L ${fmt(e.f)}</div></div>
+        ${e.grams ? `<input class="g num" data-feg="${i}" inputmode="decimal" value="${r0(e.grams)}" aria-label="Grammes"><span class="muted small">g</span>` : ''}
+        <button class="fe-del" data-fedel="${i}" aria-label="Retirer ${esc(e.name)}">✕</button>
+      </div>`).join('') : '<p class="muted small center" style="padding:12px">Aucun aliment. Ajoute-en un ci-dessous.</p>';
+    $$('[data-feg]', sh).forEach(inp => inp.oninput = () => {
+      const i = Number(inp.dataset.feg), g = num(inp.value); if (!g) return;
+      items[i] = scaleItem(items[i], g);
+      const e = items[i]; $(`[data-fesum="${i}"]`, sh).textContent = `${fmt(e.kcal)} kcal · P ${fmt(e.p)} · G ${fmt(e.c)} · L ${fmt(e.f)}`;
+      const t2 = totals(items); $('#fe-tot', sh).textContent = `${items.length} aliment${items.length > 1 ? 's' : ''} · ${fmt(t2.kcal)} kcal · P ${fmt(t2.p)} · G ${fmt(t2.c)} · L ${fmt(t2.f)}`;
+    });
+    $$('[data-fedel]', sh).forEach(b => b.onclick = () => { items.splice(Number(b.dataset.fedel), 1); draw(sh); });
+  };
+  const store = sh => { f.name = $('#fe-name', sh).value.trim() || f.name; f.meal = meal; f.items = items; save(); };
+  openSheet(`
+    <h2>✏️ Modifier le repas favori</h2>
+    <label class="field"><span>Nom</span><input class="input" id="fe-name" value="${esc(f.name)}"></label>
+    <p class="muted small" style="margin:0 4px 6px">Repas habituel</p>
+    ${mealChips(meal)}
+    <p class="small" id="fe-tot" style="margin:0 4px 8px;font-weight:650"></p>
+    <div class="list" id="fe-list"></div>
+    <button class="btn ghost" id="fe-addfood">＋ Ajouter un aliment</button>
+    <button class="btn" id="fe-save">Enregistrer</button>
+    <button class="btn danger" id="fe-delete">Supprimer ce repas favori</button>`, sh => {
+    bindMealChips(sh, m => (meal = m));
+    draw(sh);
+    $('#fe-addfood', sh).onclick = () => { store(sh); favPick = { id }; openSearch(); };
+    $('#fe-save', sh).onclick = () => { store(sh); closeSheet(); if (UI.view === 'favoris') render(); toast('Repas favori enregistré ✓'); };
+    $('#fe-delete', sh).onclick = () => {
+      if (!confirm('Supprimer le repas favori « ' + f.name + ' » ?')) return;
+      S.meals = S.meals.filter(x => x.id !== id); save(); closeSheet(); if (UI.view === 'favoris') render(); toast('Repas favori supprimé');
+    };
+  });
 }
 function openCopyFrom(k, mealId) {
   const today = todayKey();
@@ -627,9 +706,9 @@ function openSheet(html, mount) {
   const root = $('#sheet-root');
   root.innerHTML = `<div class="backdrop"></div><div class="sheet" role="dialog"><div class="sheet-top"><div class="grab"></div>
     <button class="sheet-x" aria-label="Fermer"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>${html}</div>`;
-  $('.backdrop', root).onclick = closeSheet;
+  $('.backdrop', root).onclick = userCloseSheet;
   const sh = $('.sheet', root);
-  $('.sheet-x', sh).onclick = closeSheet;
+  $('.sheet-x', sh).onclick = userCloseSheet;
   bindSheetDrag(sh);
   sheetCleanup = mount ? mount(sh) : null;
   return sh;
@@ -652,9 +731,15 @@ function bindSheetDrag(sh) {
   sh.addEventListener('touchend', () => {
     if (mode !== 'drag') return;
     sh.style.transition = 'transform .2s ease';
-    if (dy > 110) { sh.style.transform = 'translateY(100%)'; setTimeout(closeSheet, 180); }
+    if (dy > 110) { sh.style.transform = 'translateY(100%)'; setTimeout(userCloseSheet, 180); }
     else sh.style.transform = '';
   });
+}
+// favPick : on est en train d'ajouter un aliment à un repas favori (et pas au journal).
+let favPick = null, favPickTimer = null;
+function userCloseSheet() {
+  if (favPick) { const id = favPick.id; favPick = null; closeSheet(); return openFavEditor(id); }
+  closeSheet();
 }
 function closeSheet() {
   if (typeof sheetCleanup === 'function') { try { sheetCleanup(); } catch {} }
@@ -724,6 +809,19 @@ function openBody(focus) {
 
 /* ---------- Ajouter une ligne au journal ---------- */
 function addEntry(e) {
+  if (favPick) {
+    const fav = S.meals.find(m => m.id === favPick.id);
+    if (fav) {
+      const { id, time, meal, img, ...rest } = e;
+      fav.items.push({ ...rest, kcal: r0(e.kcal), p: r1(e.p), c: r1(e.c), f: r1(e.f) });
+      save();
+      clearTimeout(favPickTimer);
+      const fid = fav.id;
+      favPickTimer = setTimeout(() => { favPick = null; openFavEditor(fid); toast('Ajouté au repas favori ✓'); }, 60);
+      return;
+    }
+    favPick = null;
+  }
   UI.open.add(UI.meal || defaultMeal());
   day(UI.date).entries.push({ id: uid(), meal: UI.meal || defaultMeal(), time: Date.now(), ...e,
     kcal: r0(e.kcal), p: r1(e.p), c: r1(e.c), f: r1(e.f) });
@@ -745,7 +843,7 @@ function rememberFood(f) {
 }
 
 /* ---------- Quantité d'un aliment (base pour 100 g) ---------- */
-function openFood(f, source) {
+function openFood(f, source, opts = {}) {
   const def = f.lastGrams || f.serving || 100;
   const quick = [...new Set([f.serving, 50, 100, 150, 200, 250].filter(Boolean).map(r0))].slice(0, 5);
   const fkey = foodKey(f);
@@ -753,12 +851,14 @@ function openFood(f, source) {
     <div class="food-head"><h2 style="margin-bottom:4px">${esc(f.name)}</h2>
       <button class="star ${S.foods[fkey]?.fav ? 'on' : ''}" id="f-star" aria-label="Favori">${S.foods[fkey]?.fav ? '★' : '☆'}</button></div>
     <p class="muted small" style="margin:0 0 14px">${f.brand ? esc(f.brand) + ' · ' : ''}pour 100 g : ${fmt(f.kcal100)} kcal</p>
-    ${mealChips(UI.meal)}
+    ${favPick ? `<div class="plan-banner">⭐ Sera ajouté au repas favori <b>« ${esc(S.meals.find(m => m.id === favPick.id)?.name || '')} »</b></div>`
+      : (opts.withDay ? dayChips() : '') + mealChips(UI.meal)}
     <label class="field"><span>Quantité (grammes)</span><input class="input bigin num" id="f-g" inputmode="decimal" value="${r0(def)}"></label>
     <div class="chips">${quick.map(g => `<button class="chip" data-g="${g}">${g === r0(f.serving) ? 'Portion · ' : ''}${g} g</button>`).join('')}</div>
     <div class="nutri" id="f-n"></div>
-    <button class="btn" id="f-add">Ajouter</button>`, sh => {
+    <button class="btn" id="f-add">${favPick ? 'Ajouter au repas favori' : 'Ajouter'}</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
+    if (opts.withDay) bindDayChips(sh);
     $('#f-star', sh).onclick = () => {
       const on = toggleFavFood(f); const b = $('#f-star', sh);
       b.classList.toggle('on', on); b.textContent = on ? '★' : '☆';
@@ -779,8 +879,11 @@ function openFood(f, source) {
       const q = num(g.value); if (!q) return toast('Indique une quantité');
       const k = q / 100;
       addEntry({ name: f.name, grams: r0(q), kcal: f.kcal100 * k, p: f.p100 * k, c: f.c100 * k, f: f.f100 * k, source, per100: pick100(f) });
-      rememberFood({ ...pick100(f), lastGrams: r0(q), lastMeal: UI.meal });
-      save(); closeSheet(); UI.view = 'jour'; render(); toast('Ajouté ✓');
+      const toFav = !!favPick;
+      rememberFood({ ...pick100(f), lastGrams: r0(q), ...(toFav ? {} : { lastMeal: UI.meal }) });
+      save(); closeSheet();
+      if (toFav) return;
+      UI.view = 'jour'; render(); toast('Ajouté · ' + dayLabel(UI.date).toLowerCase() + ' ✓');
     };
   });
 }
@@ -840,7 +943,7 @@ function openSearch(initial = '') {
   let timer, ctrl;
   openSheet(`
     <h2>Rechercher un aliment</h2>
-    ${mealChips(UI.meal)}
+    ${favPick ? `<div class="plan-banner">⭐ Pour le repas favori <b>« ${esc(S.meals.find(m => m.id === favPick.id)?.name || '')} »</b></div>` : mealChips(UI.meal)}
     <input class="input" id="s-q" type="search" placeholder="ex. yogourt nature, pomme, Ovomaltine…" value="${esc(initial)}" autocomplete="off" enterkeyhint="search">
     <div id="s-res" style="margin-top:12px"></div>
     <button class="btn ghost" id="s-label">📷 Lire une étiquette nutritionnelle</button>

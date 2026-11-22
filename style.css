@@ -347,3 +347,13 @@ table.mt { font-size: 13.5px; }
 .qcard .empty { color: var(--muted); font-weight: 600; font-size: 15px; }
 .quick:has(.qcard) button { padding: 12px; }
 .quick:has(.qcard) .v { font-size: 18px; }
+
+/* v6 : éditeur de repas favori */
+.fe-row { display: flex; align-items: center; gap: 8px; padding: 11px 12px; border-top: 1px solid var(--line); }
+.fe-row:first-child { border-top: 0; }
+.fe-row .info { flex: 1; min-width: 0; }
+.fe-row .n { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-row .m { font-size: 12px; color: var(--muted); }
+.fe-row .g { width: 64px; text-align: right; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); }
+.fe-del { width: 30px; height: 30px; border-radius: 50%; background: var(--card2); color: var(--bad); font-weight: 800; flex: none; }
+.chev-r { font-size: 22px; color: var(--muted); padding-left: 6px; }
