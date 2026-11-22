@@ -674,7 +674,9 @@ function openSearch(initial = '') {
     ${mealChips(UI.meal)}
     <input class="input" id="s-q" type="search" placeholder="ex. yogourt nature, pomme, Ovomaltine…" value="${esc(initial)}" autocomplete="off" enterkeyhint="search">
     <div id="s-res" style="margin-top:12px"></div>
+    <button class="btn ghost" id="s-label">📷 Lire une étiquette nutritionnelle</button>
     <button class="btn ghost" id="s-manual">${ICON.pen} Saisie manuelle</button>`, sh => {
+    $('#s-label', sh).onclick = () => startLabel('');
     bindMealChips(sh, m => (UI.meal = m));
     const q = $('#s-q', sh), res = $('#s-res', sh);
     let base = [];
@@ -859,11 +861,14 @@ function openBarcode() {
       if (done) return; done = true; stop();
       msg.innerHTML = '<span class="spinner" style="display:block;width:24px;height:24px;margin:6px auto"></span>Recherche du produit ' + esc(code) + '…';
       try {
-        const f = await offProduct(code);
-        if (f) return openFood({ ...(S.foods['b:' + code] || {}), ...f }, 'barcode');
         const saved = S.foods['b:' + code];
-        if (saved) return openFood(saved, 'barcode');
-        msg.innerHTML = `Produit inconnu dans la base (${esc(code)}). <button class="chip" id="bc-search" style="margin-top:8px">Le chercher par son nom</button>`;
+        if (saved) return openFood(saved, 'barcode');           // produit déjà connu de Kalo (ex. étiquette lue avant)
+        const f = await offProduct(code);
+        if (f) return openFood(f, 'barcode');
+        msg.innerHTML = `<b>Produit pas encore dans la base</b> (${esc(code)}).<br>Prends en photo son tableau nutritionnel : Kalo le retiendra pour les prochaines fois.
+          <button class="btn" id="bc-label" style="margin-top:10px">📷 Photographier l'étiquette</button>
+          <button class="btn ghost" id="bc-search">Le chercher par son nom</button>`;
+        $('#bc-label', sh).onclick = () => startLabel(code);
         $('#bc-search', sh).onclick = () => openSearch();
       } catch {
         msg.textContent = 'Pas de connexion. Réessaie dans un instant.';
@@ -925,14 +930,17 @@ function openBarcode() {
 
 /* ====================== IA (photo et texte) ====================== */
 // Les deux champs photo (appareil photo / galerie) sont écoutés une seule fois, au démarrage.
+let photoMode = null;   // null = repas ; { label: true, barcode } = étiquette nutritionnelle
 async function onPhotoFile(ev) {
   const inp = ev.target, file = inp.files?.[0];
   if (!file) return;
+  const mode = photoMode; photoMode = null;
   openSheet(`<h2>Photo reçue</h2><div class="spinner"></div><p class="center muted">Préparation de la photo…</p>`);
   try {
-    const { b64, thumb } = await shrink(file);
+    const { b64, thumb } = await shrink(file, mode ? 1568 : 1024);
     inp.value = '';
-    runAI({ image: b64, thumb });
+    if (mode?.label) readLabel(b64, thumb, mode.barcode);
+    else runAI({ image: b64, thumb });
   } catch (e) {
     inp.value = '';
     showError('Impossible de lire cette photo. Essaie de la reprendre.', e);
@@ -959,7 +967,7 @@ function askKey() {
     $('#k-later', sh).onclick = closeSheet;
   });
 }
-function shrink(file) {
+function shrink(file, max = 1024) {
   return new Promise((ok, ko) => {
     const url = URL.createObjectURL(file), img = new Image();
     img.onload = () => {
@@ -968,7 +976,7 @@ function shrink(file) {
         const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
         c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); return c;
       };
-      const big = draw(1024).toDataURL('image/jpeg', 0.82).split(',')[1];
+      const big = draw(max).toDataURL('image/jpeg', 0.85).split(',')[1];
       const thumb = draw(160).toDataURL('image/jpeg', 0.7);
       URL.revokeObjectURL(url); ok({ b64: big, thumb });
     };
@@ -1005,13 +1013,13 @@ Règles :
 
 let sdkPromise = null;
 const loadSDK = () => (sdkPromise ||= import(SDK_URL).catch(e => { sdkPromise = null; throw Object.assign(e, { stage: 'sdk' }); }));
-async function callClaude(content, maxTokens = 16000) {
+async function callClaude(content, maxTokens = 16000, schema = AI_SCHEMA) {
   const { default: Anthropic } = await loadSDK();
   const client = new Anthropic({ apiKey: S.apiKey, dangerouslyAllowBrowser: true, timeout: 120000, maxRetries: 1 });
   const msg = await client.messages.create({
     model: MODEL,
     max_tokens: maxTokens,
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: AI_SCHEMA } },
+    output_config: { effort: 'low', format: { type: 'json_schema', schema } },
     messages: [{ role: 'user', content }],
   });
   if (msg.stop_reason === 'refusal') throw Object.assign(new Error('refus'), { code: 'refusal' });
@@ -1032,6 +1040,71 @@ function aiErrorText(err) {
   return "L'analyse n'a pas marché.";
 }
 
+const LABEL_SCHEMA = {
+  type: 'object',
+  properties: {
+    is_label: { type: 'boolean' },
+    name: { type: 'string' }, brand: { type: 'string' },
+    kcal100: { type: 'number' }, p100: { type: 'number' }, c100: { type: 'number' }, f100: { type: 'number' },
+    serving_g: { type: 'number' },
+  },
+  required: ['is_label', 'name', 'brand', 'kcal100', 'p100', 'c100', 'f100', 'serving_g'], additionalProperties: false,
+};
+const LABEL_PROMPT = `Lis le tableau des valeurs nutritives sur cette photo d'emballage.
+- Donne les valeurs POUR 100 g (ou 100 ml) : énergie en kcal, protéines, glucides (glucides totaux, pas seulement les sucres), lipides (matières grasses totales), en grammes.
+- Si seule l'énergie en kJ est indiquée, convertis (kcal = kJ / 4,184).
+- Si le tableau n'est donné que par portion, ramène à 100 g avec le poids de la portion.
+- name : le nom du produit en français s'il est visible, sinon un nom court et clair ; brand : la marque si visible, sinon "".
+- serving_g : poids d'une portion en grammes si indiqué, sinon 0.
+- Si on ne voit pas de tableau nutritionnel lisible, mets is_label à false et 0 partout.`;
+function startLabel(barcode) {
+  if (!S.apiKey) return askKey();
+  photoMode = { label: true, barcode: barcode || '' };
+  $('#photo-input').click();
+}
+async function readLabel(b64, thumb, barcode) {
+  openSheet(`<h2>Lecture de l'étiquette</h2><img class="photo-prev" src="${thumb}" alt="" style="max-height:140px">
+    <div class="spinner"></div><p class="center muted">L'IA lit le tableau nutritionnel… (10 à 30 s)</p>`);
+  let r;
+  try {
+    r = await callClaude([{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } }, { type: 'text', text: LABEL_PROMPT }], 8000, LABEL_SCHEMA);
+  } catch (err) { return showError(aiErrorText(err), err); }
+  if (!r.is_label) {
+    openSheet(`<h2>Étiquette illisible</h2><p class="muted">Reprends la photo bien en face du tableau nutritionnel, sans reflet, en t'approchant.</p>
+      <button class="btn" id="lb-again">📷 Reprendre la photo</button><button class="btn ghost" id="lb-manual">Saisir à la main</button>`, sh => {
+      $('#lb-again', sh).onclick = () => startLabel(barcode);
+      $('#lb-manual', sh).onclick = () => openManual('');
+    });
+    return;
+  }
+  openSheet(`
+    <h2>Vérifie les valeurs</h2>
+    <p class="muted small" style="margin:-8px 0 12px">Lues sur l'étiquette, <b>pour 100 g</b>. Corrige si besoin.${barcode ? ` Kalo retiendra ce produit pour le code-barres ${esc(barcode)}.` : ''}</p>
+    <label class="field"><span>Nom du produit</span><input class="input" id="lb-n" value="${esc(r.name)}"></label>
+    <label class="field"><span>Marque</span><input class="input" id="lb-b" value="${esc(r.brand)}"></label>
+    <div class="row4">
+      <label class="field"><span>kcal</span><input class="input num" id="lb-k" inputmode="decimal" value="${r0(r.kcal100)}"></label>
+      <label class="field"><span>Prot.</span><input class="input num" id="lb-p" inputmode="decimal" value="${fmt(r.p100, 1)}"></label>
+      <label class="field"><span>Gluc.</span><input class="input num" id="lb-c" inputmode="decimal" value="${fmt(r.c100, 1)}"></label>
+      <label class="field"><span>Lip.</span><input class="input num" id="lb-f" inputmode="decimal" value="${fmt(r.f100, 1)}"></label>
+    </div>
+    <label class="field"><span>Portion (g), si indiquée</span><input class="input num" id="lb-s" inputmode="decimal" value="${r.serving_g ? r0(r.serving_g) : ''}" placeholder="facultatif"></label>
+    <button class="btn" id="lb-ok">Enregistrer le produit</button>`, sh => {
+    $('#lb-ok', sh).onclick = () => {
+      const v = id => num($(id, sh).value);
+      const food = {
+        name: $('#lb-n', sh).value.trim() || 'Produit', brand: $('#lb-b', sh).value.trim(), barcode,
+        kcal100: r0(v('#lb-k') || 0), p100: r1(v('#lb-p') || 0), c100: r1(v('#lb-c') || 0), f100: r1(v('#lb-f') || 0),
+        serving: v('#lb-s') ? r0(v('#lb-s')) : null, source: barcode ? 'barcode' : 'search',
+      };
+      if (!food.kcal100) return toast('Il faut au moins les calories');
+      rememberFood(food);                      // gardé tout de suite, même si on n'ajoute rien
+      save();
+      openFood(food, barcode ? 'barcode' : 'search');
+      toast('Produit enregistré ✓');
+    };
+  });
+}
 async function runAI({ image, thumb, text }) {
   if (!S.apiKey) return askKey();
   const meal = UI.meal;
