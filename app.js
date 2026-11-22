@@ -1731,7 +1731,8 @@ function renderProfile(app) {
     const c = $('#g-code').value.replace(/\s+/g, '');
     if (c.length < 16) return toast('Colle le code complet');
     S.garminCode = c; S.garminAuto = true; save();
-    await garminSync(false, 60);
+    await checkStartByCode();                 // date de début propre à ce téléphone, avant de récupérer Garmin
+    await garminSync(false, 366);
     if (!S.garminLast) { S.garminCode = ''; save(); render(); }
   };
   if ($('#g-now')) $('#g-now').onclick = () => garminSync(false, 366);
@@ -1783,16 +1784,23 @@ function renderProfile(app) {
 }
 
 /* ====================== Démarrage ====================== */
-// Seulement sur le téléphone de Francisco : on reconnaît son code Garmin par son empreinte (le code lui-même n'est pas ici).
-const FRANCISCO_CODE_SHA = 'dbd8131f9e1f39a720410071cad5e12a0a8f2125235582d632e05eb514e862bc';
-if (S.profile && S.garminCode && S.startDate === undefined && crypto.subtle) {
-  crypto.subtle.digest('SHA-256', new TextEncoder().encode(S.garminCode)).then(buf => {
+// Début d'historique demandé par Francisco, par téléphone. On reconnaît le téléphone à l'empreinte
+// de son code Garmin (les codes eux-mêmes ne sont pas ici). S'applique une seule fois, puis réglable dans Profil.
+const START_BY_CODE = {
+  'dbd8131f9e1f39a720410071cad5e12a0a8f2125235582d632e05eb514e862bc': '2026-10-10',   // Francisco
+  'e519bd64c299b44405b87b8c4ae6b35ad819a8d7e088c6cd9a33812cf1f3005c': '2026-11-23',   // sa femme
+};
+function checkStartByCode() {
+  if (!S.profile || !S.garminCode || S.startDate !== undefined || !crypto.subtle) return Promise.resolve();
+  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(S.garminCode)).then(buf => {
     const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-    if (hex !== FRANCISCO_CODE_SHA || S.startDate !== undefined) return;
-    const n = applyStartDate('2026-10-10'); render();
-    toast(`Historique démarré au 10 oct. 2026 (${n} jours plus anciens effacés)`);
+    const start = START_BY_CODE[hex];
+    if (!start || S.startDate !== undefined) return;
+    const n = applyStartDate(start); render();
+    toast(`Historique démarré au ${shortDate(start)}${n ? ` (${n} jours plus anciens effacés)` : ''}`);
   }).catch(() => {});
 }
+checkStartByCode();
 if (S.apiKey && /[^A-Za-z0-9_-]/.test(S.apiKey)) { S.apiKey = S.apiKey.replace(/[^A-Za-z0-9_-]/g, ''); save(); }
 render();
 const garminAuto = () => { if (S.garminCode && S.garminAuto !== false && ((S.garminV || 0) < 2 || Date.now() - (S.garminLast || 0) > 30 * 60e3)) garminSync(true); };
