@@ -27,7 +27,7 @@ let S = loadStore();
 function loadStore() {
   let d = null;
   try { d = JSON.parse(localStorage.getItem(STORE)); } catch {}
-  return Object.assign({ profile: null, apiKey: '', days: {}, foods: {} }, d || {});
+  return Object.assign({ profile: null, apiKey: '', days: {}, foods: {}, meals: [] }, d || {});
 }
 function save() {
   try { localStorage.setItem(STORE, JSON.stringify(S)); }
@@ -65,9 +65,12 @@ function dayLabel(k) {
   const t = todayKey();
   if (k === t) return 'Aujourd\'hui';
   if (k === addDays(t, -1)) return 'Hier';
+  if (k === addDays(t, 1)) return 'Demain';
   const d = dateOf(k);
   return `${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`;
 }
+const AHEAD = 35;                       // on peut remplir jusqu'à 5 semaines à l'avance
+const maxKey = () => addDays(todayKey(), AHEAD);
 function defaultMeal() {
   const h = new Date().getHours() + new Date().getMinutes() / 60;
   if (h < 10.5) return 'dej';
@@ -85,6 +88,11 @@ const r1 = n => Math.round((n || 0) * 10) / 10;
 const fmt = (n, dec = 0) => (n == null || isNaN(n)) ? '–' : Number(n).toLocaleString('fr-CH', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
+// Toucher un champ chiffré sélectionne tout : on tape la nouvelle valeur sans rien effacer.
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (t.matches?.('input.num, input.g')) setTimeout(() => { try { t.select(); t.setSelectionRange(0, t.value.length); } catch {} }, 0);
+});
 let toastT;
 function toast(msg, action, onAction) {
   const t = $('#toast');
@@ -230,17 +238,19 @@ function renderDay(app) {
   const mon = mondayOf(k);
   const strip = Array.from({ length: 7 }, (_, i) => {
     const dk = addDays(mon, i), dt = dateOf(dk), has = dayKcal(S.days[dk]) != null;
-    return `<button data-day="${dk}" class="${dk === k ? 'sel' : ''} ${has ? 'has' : ''} ${dk > today ? 'future' : ''}" ${dk > today ? 'disabled' : ''}>${DOW1[dt.getDay()]}<b>${dt.getDate()}</b></button>`;
+    return `<button data-day="${dk}" class="${dk === k ? 'sel' : ''} ${has ? 'has' : ''} ${dk > today ? 'future' : ''}" ${dk > maxKey() ? 'disabled' : ''}>${DOW1[dt.getDay()]}<b>${dt.getDate()}</b></button>`;
   }).join('');
   app.innerHTML = `
     <div class="top">
       <h1>${dayLabel(k)}</h1>
       <div class="datenav">
         <button class="iconbtn" id="prev" aria-label="Jour précédent">${ICON.left}</button>
-        <button class="iconbtn" id="next" aria-label="Jour suivant" ${k >= today ? 'disabled' : ''}>${ICON.right}</button>
+        <button class="iconbtn" id="next" aria-label="Jour suivant" ${k >= maxKey() ? 'disabled' : ''}>${ICON.right}</button>
       </div>
     </div>
     <div class="weekstrip">${strip}</div>
+    ${k !== today ? `<button class="today-link" id="go-today">↩ Revenir à aujourd'hui</button>` : ''}
+    ${k > today ? `<div class="plan-banner">🗓️ <b>Jour à venir.</b> Ce que tu ajoutes ici est prévu ; ça comptera dans tes moyennes une fois le jour arrivé.</div>` : ''}
     <div class="card hero">
       <div><div class="big num">${fmt(Math.abs(left))}</div><div class="sub">${left >= 0 ? 'calories restantes' : 'calories en trop'} · ${fmt(tot.kcal)} / ${fmt(T.kcal)}</div></div>
       ${ring(tot.kcal, T.kcal, 'var(--kcal)', ICON.flame)}
@@ -254,9 +264,12 @@ function renderDay(app) {
     </div>
     ${MEALS.map(m => {
       const es = d.entries.filter(e => e.meal === m.id), mt = totals(es);
+      const prevEs = es.length ? [] : (S.days[addDays(k, -1)]?.entries || []).filter(e => e.meal === m.id);
       return `<div class="meal">
         <div class="meal-head"><div><span class="t">${m.emoji} ${m.name}</span>${es.length ? `<span class="k num">${fmt(mt.kcal)} kcal</span>` : ''}</div>
-          <button class="addmini" data-addmeal="${m.id}" aria-label="Ajouter à ${m.name}">${ICON.plus}</button></div>
+          <div class="meal-btns"><button class="addmini" data-mealmenu="${m.id}" aria-label="Options ${m.name}">⋯</button>
+          <button class="addmini" data-addmeal="${m.id}" aria-label="Ajouter à ${m.name}">${ICON.plus}</button></div></div>
+        ${prevEs.length ? `<button class="sameas" data-sameas="${m.id}">↺ Comme la veille <span class="muted">· ${prevEs.length} aliment${prevEs.length > 1 ? 's' : ''} · ${fmt(totals(prevEs).kcal)} kcal</span></button>` : ''}
         ${es.length ? es.map(e => `<div class="swipe" data-swipe="${e.id}"><button class="swipe-del" data-del="${e.id}">Supprimer</button><button class="entry" data-entry="${e.id}">
             <span class="thumb">${e.img ? `<img class="thumb" src="${e.img}" alt="">` : srcEmoji(e.source)}</span>
             <span class="info"><span class="n">${esc(e.name)}</span>
@@ -266,6 +279,7 @@ function renderDay(app) {
     }).join('')}
     ${imported ? `<div class="card"><h3>📥 Journée importée</h3><p class="muted small" style="margin:0">Total de la journée : <b>${fmt(d.kcalImport)} kcal</b> (sans le détail des repas ni des macros). Si tu ajoutes un repas ce jour-là, ce sont tes repas qui comptent.</p></div>`
       : !d.entries.length ? '<p class="center muted small">Appuie sur le bouton <b>+</b> en bas pour ajouter un repas.</p>' : ''}
+    ${d.entries.length ? `<button class="btn ghost" id="copy-day" style="margin-top:6px">📋 Copier toute la journée vers…</button>` : ''}
     ${backupDue() ? `<div class="card" style="margin-top:18px"><h3>💾 Copie de sauvegarde</h3>
       <p class="muted small" style="margin-top:0">Tes données sont seulement sur ce téléphone. Garde une copie (dans Fichiers, iCloud ou Google Drive) au cas où tu le perdrais.</p>
       <button class="btn" id="bk-go">Faire une copie</button><button class="btn danger" id="bk-later" style="color:var(--muted)">Plus tard</button></div>` : ''}
@@ -275,7 +289,15 @@ function renderDay(app) {
     $('#bk-later').onclick = () => { S.backupSnooze = Date.now(); save(); render(); };
   }
   $('#prev').onclick = () => { UI.date = addDays(k, -1); render(); };
-  $('#next').onclick = () => { if (k < today) { UI.date = addDays(k, 1); render(); } };
+  $('#next').onclick = () => { if (k < maxKey()) { UI.date = addDays(k, 1); render(); } };
+  if ($('#go-today')) $('#go-today').onclick = () => { UI.date = today; render(); };
+  $$('[data-mealmenu]', app).forEach(b => b.onclick = () => openMealMenu(k, b.dataset.mealmenu));
+  $$('[data-sameas]', app).forEach(b => b.onclick = () => {
+    const src = (S.days[addDays(k, -1)]?.entries || []).filter(e => e.meal === b.dataset.sameas);
+    const ids = copyEntries(src, k);
+    render(); toast('Repris de la veille ✓', 'Annuler', () => undoAdd(k, ids));
+  });
+  if ($('#copy-day')) $('#copy-day').onclick = () => openCopy(k, null);
   $$('[data-day]', app).forEach(b => b.onclick = () => { UI.date = b.dataset.day; render(); });
   $('#q-weight').onclick = () => openBody('weight');
   $('#q-steps').onclick = () => openBody('steps');
@@ -288,6 +310,113 @@ function renderDay(app) {
   });
   $$('[data-del]', app).forEach(b => b.onclick = () => deleteEntry(k, b.dataset.del));
   $$('[data-swipe]', app).forEach(w => bindSwipe(w, () => deleteEntry(k, w.dataset.swipe)));
+}
+/* ---------- Copier, repas favoris ---------- */
+function copyEntries(list, toKey, meal) {
+  const ids = [];
+  for (const e of list) {
+    const id = uid(); ids.push(id);
+    day(toKey).entries.push({ ...e, id, time: Date.now(), meal: meal || e.meal });
+  }
+  save(); return ids;
+}
+function undoAdd(k, ids) {
+  const d = S.days[k]; if (!d) return;
+  d.entries = d.entries.filter(e => !ids.includes(e.id)); cleanDay(k); save(); render();
+}
+const mealName = id => MEALS.find(m => m.id === id)?.name || '';
+function openMealMenu(k, mealId) {
+  const es = (S.days[k]?.entries || []).filter(e => e.meal === mealId);
+  const m = MEALS.find(x => x.id === mealId);
+  openSheet(`
+    <h2>${m.emoji} ${m.name}</h2>
+    <p class="muted small" style="margin:-8px 0 14px">${dayLabel(k)}${es.length ? ` · ${es.length} aliment${es.length > 1 ? 's' : ''} · ${fmt(totals(es).kcal)} kcal` : ''}</p>
+    <div class="list">
+      ${es.length ? `<button class="li" id="mm-fav"><span class="info"><span class="n">⭐ Enregistrer comme repas favori</span><span class="m">Pour le remettre en un geste (ex. « Crêpes banane »)</span></span></button>
+      <button class="li" id="mm-copy"><span class="info"><span class="n">📋 Copier vers un autre jour</span><span class="m">Demain, la semaine prochaine…</span></span></button>` : ''}
+      <button class="li" id="mm-favs"><span class="info"><span class="n">⭐ Ajouter un de mes repas favoris</span><span class="m">${S.meals.length ? S.meals.length + ' repas enregistré' + (S.meals.length > 1 ? 's' : '') : 'Aucun pour l\'instant'}</span></span></button>
+      ${es.length ? `<button class="li" id="mm-clear"><span class="info"><span class="n" style="color:var(--bad)">🗑️ Vider ce repas</span></span></button>` : ''}
+    </div>`, sh => {
+    if ($('#mm-fav', sh)) $('#mm-fav', sh).onclick = () => openSaveFav(es, m);
+    if ($('#mm-copy', sh)) $('#mm-copy', sh).onclick = () => openCopy(k, mealId);
+    $('#mm-favs', sh).onclick = () => { UI.date = k; openFavs(mealId); };
+    if ($('#mm-clear', sh)) $('#mm-clear', sh).onclick = () => {
+      const d = S.days[k], kept = d.entries.filter(e => e.meal !== mealId), gone = d.entries.filter(e => e.meal === mealId);
+      d.entries = kept; cleanDay(k); save(); closeSheet(); render();
+      toast(m.name + ' vidé', 'Annuler', () => { day(k).entries.push(...gone); save(); render(); });
+    };
+  });
+}
+function openSaveFav(es, m) {
+  const t = totals(es);
+  openSheet(`
+    <h2>⭐ Nouveau repas favori</h2>
+    <p class="muted small" style="margin:-8px 0 12px">${es.length} aliment${es.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</p>
+    <label class="field"><span>Nom du repas</span><input class="input" id="fav-n" placeholder="ex. Crêpes banane" value=""></label>
+    <div class="list">${es.map(e => `<div class="li"><span class="info"><span class="n">${esc(e.name)}</span><span class="m">${e.grams ? fmt(e.grams) + ' g · ' : ''}${fmt(e.kcal)} kcal</span></span></div>`).join('')}</div>
+    <button class="btn" id="fav-save">Enregistrer</button>`, sh => {
+    setTimeout(() => $('#fav-n', sh).focus(), 280);
+    $('#fav-save', sh).onclick = () => {
+      const name = $('#fav-n', sh).value.trim() || m.name;
+      S.meals.unshift({ id: uid(), name, meal: m.id, items: es.map(({ id, time, meal, ...rest }) => rest) });
+      save(); closeSheet(); toast('« ' + name + ' » enregistré ⭐');
+    };
+  });
+}
+// fixedMeal : ouvert depuis un repas précis. Sinon chaque favori va dans son repas habituel (sauf choix contraire).
+function openFavs(fixedMeal) {
+  let target = fixedMeal || '';
+  const draw = sh => {
+    $('#fav-list', sh).innerHTML = S.meals.length ? S.meals.map(f => {
+      const t = totals(f.items);
+      return `<div class="fav-row"><button class="li" data-fav="${f.id}"><span class="info"><span class="n">${esc(f.name)}</span>
+        <span class="m">${f.items.length} aliment${f.items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</span></span><span class="tag">Ajouter</span></button>
+        <button class="fav-del" data-favdel="${f.id}" aria-label="Supprimer ${esc(f.name)}">🗑️</button></div>`;
+    }).join('') : `<p class="muted small center" style="padding:14px">Pas encore de repas favori.<br>Note ton repas une fois (ex. tes crêpes), puis touche <b>⋯</b> à côté du repas → <b>Enregistrer comme repas favori</b>.</p>`;
+    $$('[data-fav]', sh).forEach(b => b.onclick = () => {
+      const f = S.meals.find(x => x.id === b.dataset.fav);
+      const k = UI.date, ids = copyEntries(f.items, k, target || f.meal);
+      f.used = (f.used || 0) + 1; save();
+      closeSheet(); UI.view = 'jour'; render();
+      toast('« ' + f.name + ' » ajouté ✓', 'Annuler', () => undoAdd(k, ids));
+    });
+    $$('[data-favdel]', sh).forEach(b => b.onclick = () => {
+      if (!confirm('Supprimer ce repas favori ?')) return;
+      S.meals = S.meals.filter(x => x.id !== b.dataset.favdel); save(); draw(sh);
+    });
+  };
+  openSheet(`
+    <h2>⭐ Mes repas</h2>
+    ${UI.date !== todayKey() ? `<p class="muted small" style="margin:-8px 0 12px">Pour : ${dayLabel(UI.date).toLowerCase()}</p>` : ''}
+    <div class="chips"><button class="chip ${target ? '' : 'on'}" data-meal="">Son repas habituel</button>${MEALS.map(m => `<button class="chip ${m.id === target ? 'on' : ''}" data-meal="${m.id}">${m.emoji} ${m.name}</button>`).join('')}</div>
+    <div class="list" id="fav-list"></div>`, sh => { bindMealChips(sh, m => (target = m)); draw(sh); });
+}
+function openCopy(k, mealId) {
+  const es = (S.days[k]?.entries || []).filter(e => !mealId || e.meal === mealId);
+  const today = todayKey();
+  const opts = [...new Set([addDays(k, 1), today, addDays(today, 1), addDays(k, 7)])].filter(x => x !== k && x <= maxKey());
+  let target = opts[0];
+  openSheet(`
+    <h2>📋 Copier ${mealId ? 'le ' + mealName(mealId).toLowerCase() : 'la journée'}</h2>
+    <p class="muted small" style="margin:-8px 0 12px">${dayLabel(k)} · ${es.length} aliment${es.length > 1 ? 's' : ''} · ${fmt(totals(es).kcal)} kcal</p>
+    <p class="muted small" style="margin:0 4px 6px">Vers quel jour ?</p>
+    <div class="chips">${opts.map((o, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-to="${o}">${o === addDays(k, 7) && o !== addDays(today, 1) ? 'Même jour, sem. suivante' : dayLabel(o)}</button>`).join('')}</div>
+    <label class="field"><span>Ou choisis une date</span><input class="input" type="date" id="cp-date" min="${addDays(today, -365)}" max="${maxKey()}" value="${target}"></label>
+    ${mealId ? `<p class="muted small" style="margin:0 4px 6px">Dans quel repas ?</p>${mealChips(mealId)}` : ''}
+    <button class="btn" id="cp-go">Copier</button>`, sh => {
+    let meal = mealId;
+    const dIn = $('#cp-date', sh);
+    $$('[data-to]', sh).forEach(b => b.onclick = () => { target = b.dataset.to; dIn.value = target; $$('[data-to]', sh).forEach(x => x.classList.toggle('on', x === b)); });
+    dIn.onchange = () => { target = dIn.value; $$('[data-to]', sh).forEach(x => x.classList.toggle('on', x.dataset.to === target)); };
+    if (mealId) bindMealChips(sh, m => (meal = m));
+    $('#cp-go', sh).onclick = () => {
+      if (!target || target > maxKey()) return toast('Choisis un jour (jusqu\'à 5 semaines à l\'avance)');
+      const ids = copyEntries(es, target, mealId ? meal : null);
+      closeSheet(); render();
+      toast('Copié vers ' + dayLabel(target).toLowerCase() + ' ✓', 'Voir', () => { UI.date = target; UI.view = 'jour'; render(); });
+      void ids;
+    };
+  });
 }
 // Rappel de sauvegarde : dès 3 jours notés, puis toutes les semaines.
 function backupDue() {
@@ -408,7 +537,8 @@ function openAdd(meal) {
       <button class="choice primary" id="c-photo"><span class="ic">${ICON.camera}</span><b>Photo du repas</b><span>L'IA calcule tout</span></button>
       <button class="choice" id="c-barcode"><span class="ic">${ICON.barcode}</span><b>Code-barres</b><span>Scanner un emballage</span></button>
       <button class="choice" id="c-search"><span class="ic">${ICON.search}</span><b>Rechercher</b><span>Taper un aliment</span></button>
-      <button class="choice" id="c-body"><span class="ic">${ICON.scale}</span><b>Poids et pas</b><span>${S.days[UI.date]?.weight != null ? 'Poids noté ✓' : 'Pas encore noté'}</span></button>
+      <button class="choice" id="c-favs"><span class="ic">⭐</span><b>Mes repas</b><span>${S.meals.length ? S.meals.length + ' favori' + (S.meals.length > 1 ? 's' : '') : 'Tes repas habituels'}</span></button>
+      <button class="choice wide" id="c-body"><span class="ic">${ICON.scale}</span><b>Poids et pas</b><span>${S.days[UI.date]?.weight != null ? 'Poids noté ✓' : 'Pas encore noté'}</span></button>
     </div>
     <button class="btn ghost" id="c-gallery" style="margin-top:12px">🖼️ Choisir une photo déjà prise</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
@@ -417,6 +547,7 @@ function openAdd(meal) {
     $('#c-barcode', sh).onclick = openBarcode;
     $('#c-search', sh).onclick = () => openSearch();
     $('#c-body', sh).onclick = () => openBody();
+    $('#c-favs', sh).onclick = () => openFavs();
   });
 }
 
@@ -483,6 +614,7 @@ function openFood(f, source) {
         <div><b class="num" style="color:var(--fat)">${fmt(f.f100 * k)}</b><small>lip. g</small></div>`;
     };
     g.oninput = upd; upd();
+    setTimeout(() => { g.focus(); try { g.select(); } catch {} }, 280);
     $$('[data-g]', sh).forEach(b => b.onclick = () => { g.value = b.dataset.g; upd(); });
     $('#f-add', sh).onclick = () => {
       const q = num(g.value); if (!q) return toast('Indique une quantité');
@@ -990,7 +1122,9 @@ function reviewAI(res, source, thumb) {
 function periodKey(k, type) { return type === 'week' ? mondayOf(k) : k.slice(0, 7); }
 function periodStats(type) {
   const groups = {};
+  const today = todayKey();
   for (const [k, d] of Object.entries(S.days)) {
+    if (k > today) continue;                 // jours prévus : pas encore dans les moyennes
     const pk = periodKey(k, type);
     const g = groups[pk] || (groups[pk] = { key: pk, kcal: [], steps: [], weight: [], prot: [] });
     if (d.entries?.length) { const t = totals(d.entries); g.kcal.push(t.kcal); g.prot.push(t.p); }
@@ -1276,7 +1410,7 @@ function renderProfile(app) {
       const d = JSON.parse(await f.text());
       if (!d.profile || !d.days) throw 0;
       if (!confirm('Remplacer les données de ce téléphone par cette copie ?')) return;
-      S = Object.assign({ profile: null, apiKey: '', days: {}, foods: {} }, d, { apiKey: S.apiKey }); save(); render(); toast('Copie restaurée');
+      S = Object.assign({ profile: null, apiKey: '', days: {}, foods: {}, meals: [] }, d, { apiKey: S.apiKey }); save(); render(); toast('Copie restaurée');
     } catch { toast('Ce fichier n\'est pas une copie valide'); }
   };
   $('#x-redo').onclick = () => {

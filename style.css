@@ -58,7 +58,9 @@ input, select { font: inherit; color: inherit; }
 .weekstrip button b { font-size: 15px; color: var(--text); width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; border: 2px dashed var(--line); font-weight: 600; }
 .weekstrip button.has b { border-style: solid; border-color: var(--green); }
 .weekstrip button.sel { background: var(--card); box-shadow: var(--shadow); color: var(--text); }
-.weekstrip button.future { opacity: .35; }
+.weekstrip button.future b { border-color: var(--line); border-style: dotted; }
+.weekstrip button.future.has b { border-color: var(--green); border-style: dotted; }
+.weekstrip button:disabled { opacity: .3; }
 
 /* ---------- Cartes ---------- */
 .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; margin-bottom: 12px; }
@@ -256,3 +258,16 @@ input, select { font: inherit; color: inherit; }
 .key-in { resize: none; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; -webkit-text-security: disc; word-break: break-all; }
 .key-ok { background: var(--good-bg); color: var(--good); font-weight: 700; border-radius: 14px; padding: 12px 14px; font-size: 14.5px; }
 .key-ok span { font-weight: 600; font-size: 13px; opacity: .85; }
+
+.meal-btns { display: flex; gap: 8px; }
+.meal-btns .addmini { font-size: 18px; font-weight: 800; line-height: 1; }
+.sameas { display: block; width: calc(100% - 36px); margin: 0 18px 14px; padding: 10px 12px; border-radius: 12px; border: 1.5px dashed var(--line); text-align: left; font-size: 14px; font-weight: 600; }
+.today-link { display: block; margin: -6px auto 12px; font-size: 13.5px; font-weight: 650; color: var(--muted); }
+.plan-banner { background: var(--card2); border-radius: 14px; padding: 10px 14px; font-size: 13.5px; margin-bottom: 12px; }
+.choice.wide { grid-column: span 2; flex-direction: row; align-items: center; }
+.choice.wide span:last-child { margin-left: auto; }
+.choice .ic { font-size: 22px; }
+.fav-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+.fav-row:first-child { border-top: 0; }
+.fav-row .li { border-top: 0; }
+.fav-del { padding: 0 16px; font-size: 18px; }
