@@ -1106,13 +1106,17 @@ function renderProfile(app) {
     </div>
     <div class="card">
       <h3>Analyse des photos par l'IA</h3>
-      <p class="muted small" style="margin-top:0">${S.apiKey ? `✓ Clé enregistrée : <b class="num">${esc(S.apiKey.slice(0, 14))}…${esc(S.apiKey.slice(-4))}</b> (${S.apiKey.length} caractères, normalement 108).` : 'Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.'}</p>
-      <button class="btn" id="k-paste">📋 Coller ma clé</button>
-      <p class="muted small" style="margin:10px 4px 6px">Ou appuie longtemps dans le champ ci-dessous, puis « Coller » :</p>
-      <textarea class="input key-in" id="p-key" rows="2" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-ant-…"></textarea>
-      <p class="small" id="k-check" style="margin:6px 4px 0"></p>
-      <button class="btn" id="k-save">Enregistrer la clé</button>
-      ${S.apiKey ? '<button class="btn ghost" id="k-test">Tester la clé</button><p class="small center" id="k-res" style="margin:8px 0 0"></p>' : ''}
+      ${S.apiKey ? `<div class="key-ok">✓ Clé enregistrée sur ce téléphone<br><span class="num">${esc(S.apiKey.slice(0, 14))}…${esc(S.apiKey.slice(-4))} · ${S.apiKey.length} caractères</span></div>
+      <button class="btn" id="k-test">Tester la clé</button><p class="small center" id="k-res" style="margin:8px 0 0"></p>
+      <button class="btn ghost" id="k-change">Changer de clé</button>` : ''}
+      <div id="k-form" ${S.apiKey ? 'hidden' : ''}>
+        <p class="muted small" style="margin-top:${S.apiKey ? '14px' : '0'}">Colle ici ta clé IA (elle commence par « sk-ant- »). Elle reste sur ce téléphone.</p>
+        <button class="btn" id="k-paste">📋 Coller ma clé</button>
+        <p class="muted small" style="margin:10px 4px 6px">Ou appuie longtemps dans le champ ci-dessous, puis « Coller » :</p>
+        <textarea class="input key-in" id="p-key" rows="2" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-ant-…"></textarea>
+        <p class="small" id="k-check" style="margin:6px 4px 0"></p>
+        <button class="btn" id="k-save">Enregistrer la clé</button>
+      </div>
     </div>
     <div class="card">
       <h3>Sauvegarde</h3>
@@ -1180,7 +1184,12 @@ function renderProfile(app) {
     const k = cleanKey(keyIn.value);
     if (!k) return toast('Colle ta clé dans le champ');
     if (k && !k.startsWith('sk-ant-')) return toast('Cette clé ne ressemble pas à une clé Anthropic');
-    S.apiKey = k; save(); render(); toast(k ? 'Clé enregistrée' : 'Clé effacée');
+    S.apiKey = k; save(); render(); toast('Clé enregistrée ✓ Test en cours…');
+    // On la teste tout de suite pour savoir si elle marche.
+    setTimeout(() => { $('#k-test')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); $('#k-test')?.click(); }, 150);
+  };
+  if ($('#k-change')) $('#k-change').onclick = () => {
+    $('#k-form').hidden = false; $('#k-change').hidden = true; $('#k-paste').scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
   if ($('#k-test')) $('#k-test').onclick = async () => {
     const b = $('#k-test'), out = $('#k-res'); b.disabled = true; out.textContent = 'Test en cours… (10 à 20 s)';

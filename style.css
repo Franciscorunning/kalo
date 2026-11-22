@@ -254,3 +254,5 @@ input, select { font: inherit; color: inherit; }
 #toast button { color: inherit; font-weight: 800; text-decoration: underline; margin-left: 10px; }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(100px + var(--safe-b)); background: var(--accent); color: var(--on-accent); padding: 11px 18px; border-radius: 999px; font-size: 14px; font-weight: 600; z-index: 60; max-width: calc(100% - 32px); text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.2); }
 .key-in { resize: none; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; -webkit-text-security: disc; word-break: break-all; }
+.key-ok { background: var(--good-bg); color: var(--good); font-weight: 700; border-radius: 14px; padding: 12px 14px; font-size: 14.5px; }
+.key-ok span { font-weight: 600; font-size: 13px; opacity: .85; }
