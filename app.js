@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '25';
+const APP_VERSION = '26';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -626,16 +626,37 @@ function bindWhere(root, onMeal) {
   };
   $$('[data-wmeal]', root).forEach(b => b.onclick = () => { $$('[data-wmeal]', root).forEach(x => x.classList.toggle('on', x === b)); onMeal(b.dataset.wmeal); });
 }
-function favsBody(target) {
-  const foods = Object.values(S.foods).filter(f => f.fav).sort((a, b) => (b.uses || 0) - (a.uses || 0));
+const favQ = { q: '' };
+function favsBody() {
   return `
+    <input class="input fav-search" id="fav-q" type="search" placeholder="🔎 Chercher dans mes favoris…" value="${esc(favQ.q)}" autocomplete="off">
     <h3 class="fav-h">🍽️ Repas favoris</h3>
     <div class="list" id="fav-list"></div>
-    <h3 class="fav-h">⭐ Aliments favoris</h3>
-    ${foods.length ? `<div class="list">${foods.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div>`
-      : `<p class="muted small center" style="padding:10px">Touche l'étoile ☆ en haut d'un aliment pour l'ajouter ici.</p>`}`;
+    <div id="fav-foods"></div>`;
+}
+function favFoodsHTML() {
+  const words = norm(favQ.q).split(/\s+/).filter(Boolean);
+  const all = Object.values(S.foods).filter(f => f.fav && words.every(w => norm(f.name + ' ' + (f.brand || '')).includes(w)));
+  if (!Object.values(S.foods).some(f => f.fav)) return `<h3 class="fav-h">⭐ Aliments favoris</h3><p class="muted small center" style="padding:10px">Touche l'étoile ☆ en haut d'un aliment pour l'ajouter ici.</p>`;
+  if (!all.length) return `<p class="muted small center" style="padding:10px">Aucun aliment favori ne correspond.</p>`;
+  const byName = (a, b) => a.name.localeCompare(b.name, 'fr');
+  let h = '';
+  const top = [...all].filter(f => (f.uses || 0) >= 2).sort((a, b) => (b.uses || 0) - (a.uses || 0)).slice(0, 5);
+  if (!words.length && top.length && all.length > 6) h += `<h3 class="fav-h">🔥 Les plus utilisés</h3><div class="list">${top.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div>`;
+  for (const c of CATS) {
+    const items = all.filter(f => catOf(f) === c.id).sort(byName);
+    if (!items.length) continue;
+    const closed = UI.favClosed?.has(c.id) && !words.length;
+    h += `<details class="fav-cat" data-cat="${c.id}" ${closed ? '' : 'open'}><summary>${c.e} ${c.t} <span class="muted">· ${items.length}</span></summary>
+      <div class="list">${items.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div></details>`;
+  }
+  return h;
 }
 function bindFavFoods(root, getTarget) {
+  $('#fav-foods', root).innerHTML = favFoodsHTML();
+  $$('.fav-cat', root).forEach(d => d.addEventListener('toggle', () => {
+    UI.favClosed = UI.favClosed || new Set(); d.open ? UI.favClosed.delete(d.dataset.cat) : UI.favClosed.add(d.dataset.cat);
+  }));
   $$('[data-pick^="favfood:"]', root).forEach(b => b.onclick = () => {
     const f = S.foods[b.dataset.pick.slice(8)];
     UI.meal = (getTarget && getTarget()) || f?.lastMeal || (UI.date === todayKey() ? defaultMeal() : 'midi');
@@ -646,12 +667,20 @@ function bindFavFoods(root, getTarget) {
 function openFavs(fixedMeal, inPage) {
   let target = fixedMeal || '';
   const draw = sh => {
-    $('#fav-list', sh).innerHTML = S.meals.length ? S.meals.map(f => {
+    const qInp = $('#fav-q', sh);
+    if (qInp && !qInp.dataset.bound) {
+      qInp.dataset.bound = '1';
+      qInp.oninput = () => { favQ.q = qInp.value; draw(sh); bindFavFoods(sh, () => target); };
+    }
+    const fw = norm(favQ.q).split(/\s+/).filter(Boolean);
+    const meals = [...S.meals].filter(m => fw.every(w => norm(m.name + ' ' + m.items.map(i => i.name).join(' ')).includes(w)))
+      .sort((a, b) => (b.used || 0) - (a.used || 0) || a.name.localeCompare(b.name, 'fr'));
+    $('#fav-list', sh).innerHTML = meals.length ? meals.map(f => {
       const t = totals(f.items);
       return `<div class="fav-row"><button class="li" data-fav="${f.id}"><span class="info"><span class="n">${esc(f.name)}</span>
         <span class="m">${MEALS.find(m => m.id === f.meal)?.emoji || ''} ${f.items.length} aliment${f.items.length > 1 ? 's' : ''} · ${fmt(t.kcal)} kcal · P ${fmt(t.p)} · G ${fmt(t.c)} · L ${fmt(t.f)}</span></span><span class="chev-r">›</span></button>
         <button class="fav-del" data-favedit="${f.id}" aria-label="Modifier ${esc(f.name)}">✏️</button></div>`;
-    }).join('') : `<p class="muted small center" style="padding:14px">Pas encore de repas favori.<br>Note ton repas une fois (ex. tes crêpes), puis touche <b>⋯</b> à côté du repas → <b>Enregistrer comme repas favori</b>.</p>`;
+    }).join('') : fw.length ? '<p class="muted small center" style="padding:10px">Aucun repas favori ne correspond.</p>' : `<p class="muted small center" style="padding:14px">Pas encore de repas favori.<br>Note ton repas une fois (ex. tes crêpes), puis touche <b>⋯</b> à côté du repas → <b>Enregistrer comme repas favori</b>.</p>`;
     $$('[data-fav]', sh).forEach(b => b.onclick = () => openFavMeal(b.dataset.fav, target));
     $$('[data-favedit]', sh).forEach(b => b.onclick = () => openFavEditor(b.dataset.favedit));
   };
@@ -1050,7 +1079,9 @@ function openFood(f, source, opts = {}) {
   openSheet(`
     <div class="food-head"><h2 style="margin-bottom:4px">${esc(f.name)}</h2>
       <button class="star ${S.foods[fkey]?.fav ? 'on' : ''}" id="f-star" aria-label="Favori">${S.foods[fkey]?.fav ? '★' : '☆'}</button></div>
-    <p class="muted small" style="margin:0 0 14px">${f.brand ? esc(f.brand) + ' · ' : ''}pour 100 g : ${fmt(f.kcal100)} kcal</p>
+    <p class="muted small" style="margin:0 0 ${S.foods[fkey]?.fav ? 6 : 14}px">${f.brand ? esc(f.brand) + ' · ' : ''}pour 100 g : ${fmt(f.kcal100)} kcal</p>
+    <div id="f-catrow" class="cat-row" ${S.foods[fkey]?.fav ? '' : 'hidden'}><span class="muted small">Rangé dans</span>
+      <select id="f-cat" class="cat-sel">${CATS.map(c => `<option value="${c.id}" ${catOf(S.foods[fkey] || f) === c.id ? 'selected' : ''}>${c.e} ${c.t}</option>`).join('')}</select></div>
     ${favPick ? `<div class="plan-banner">⭐ Sera ajouté au repas favori <b>« ${esc(S.meals.find(m => m.id === favPick.id)?.name || '')} »</b></div>`
       : (opts.withDay ? dayChips() : '') + mealChips(UI.meal)}
     <label class="field"><span>Quantité (grammes)</span><input class="input bigin num" id="f-g" inputmode="decimal" value="${r0(def)}"></label>
@@ -1059,9 +1090,12 @@ function openFood(f, source, opts = {}) {
     <button class="btn" id="f-add">${favPick ? 'Ajouter au repas favori' : 'Ajouter'}</button>`, sh => {
     bindMealChips(sh, m => (UI.meal = m));
     if (opts.withDay) bindDayChips(sh);
+    $('#f-cat', sh).onchange = ev => { const ff = S.foods[fkey]; if (ff) { ff.cat = ev.target.value; save(); if (UI.view === 'favoris') render(); toast('Rangé ✓'); } };
     $('#f-star', sh).onclick = () => {
       const on = toggleFavFood(f); const b = $('#f-star', sh);
       b.classList.toggle('on', on); b.textContent = on ? '★' : '☆';
+      $('#f-catrow', sh).hidden = !on;
+      if (on) { const ff = S.foods[fkey]; if (ff && !ff.cat) { ff.cat = catOf(f); save(); } $('#f-cat', sh).value = catOf(S.foods[fkey]); }
       toast(on ? 'Ajouté aux favoris ⭐' : 'Retiré des favoris');
     };
     const g = $('#f-g', sh);
@@ -1089,7 +1123,34 @@ function openFood(f, source, opts = {}) {
     };
   });
 }
-const pick100 = f => ({ name: f.name, brand: f.brand || '', kcal100: f.kcal100, p100: f.p100 || 0, c100: f.c100 || 0, f100: f.f100 || 0, barcode: f.barcode || '', serving: f.serving || null, source: f.source || '' });
+/* ---------- Catégories d'aliments (pour ranger les favoris) ---------- */
+const CATS = [
+  { id: 'fl', e: '🍎', t: 'Fruits et légumes' },
+  { id: 'fe', e: '🍞', t: 'Pains, céréales et féculents' },
+  { id: 'pr', e: '🍗', t: 'Viande, poisson, œufs, tofu' },
+  { id: 'la', e: '🥛', t: 'Produits laitiers' },
+  { id: 'gr', e: '🥜', t: 'Noix, graines, huiles' },
+  { id: 'su', e: '🍫', t: 'Sucré et snacks' },
+  { id: 'bo', e: '🥤', t: 'Boissons' },
+  { id: 'sp', e: '💪', t: 'Sport et compléments' },
+  { id: 'pl', e: '🍲', t: 'Plats' },
+  { id: 'au', e: '🍽️', t: 'Autres' },
+];
+// Devine la catégorie à partir du nom (pour les produits de marque, l'IA, la saisie manuelle).
+const CAT_RULES = [
+  ['sp', /whey|prot[eé]in|isolat|\bgel\b|isostar|sponser|maurten|[eé]lectrolyt|recovery|bcaa|cr[eé]atine|shaker/],
+  ['bo', /caf[eé]|\bth[eé]\b|\bjus\b|soda|coca|bi[eè]re|\bvin\b|\beau\b|boisson|smoothie|limonade|kombucha|ice ?tea|cappuccino|latte/],
+  ['pl', /pizza|burger|lasagne|curry|risotto|soupe|sandwich|quiche|gratin|bowl|\bplat\b|sushi|kebab|taco|bolo|r[oö]sti|fondue|raclette|wok|paella/],
+  ['la', /\blait\b|yogo?u?rt|yaourt|fromage|skyr|quark|s[eé]r[eé]|cr[eè]me|beurre(?! de)|mozzarella|gruy|emmental|f[eé]ta|parmesan|cottage|k[eé]fir|ricotta/],
+  ['pr', /poulet|b[oœ]e?uf|porc|veau|agneau|jambon|dinde|saumon|thon|poisson|crevette|[oœ]e?uf|tofu|steak|viande|saucisse|lard|bacon|salami|cabillaud|truite|seitan|tempeh|merguez|cervelas/],
+  ['su', /chocolat|biscuit|g[aâ]teau|cookie|bonbon|glace|sucre|confiture|\bmiel\b|nutella|ovomaltine|barre|chips|croissant|tarte|cr[eê]pe|gaufre|p[aâ]tisserie|caramel|sirop|brownie|muffin|donut/],
+  ['fe', /pain|\briz\b|p[aâ]tes?\b|spaghet|nouille|quinoa|semoule|couscous|flocon|avoine|m[uü]e?sli|granola|c[eé]r[eé]ale|pomme de terre|patate|tortilla|wrap|cracker|galette|biscotte|lentille|pois chiche|haricot(?! vert)|polenta|boulgour/],
+  ['fl', /pomme|banane|orange|fraise|framboise|myrtille|raisin|poire|kiwi|mangue|ananas|abricot|p[eê]che|cerise|citron|melon|past[eè]que|tomate|carotte|salade|courgette|brocoli|\bchou|[eé]pinard|poivron|concombre|oignon|champignon|haricot vert|l[eé]gume|fruit|avocat|betterave|poireau|petits pois|ma[iï]s/],
+  ['gr', /huile|noix|amande|noisette|cajou|cacahu|arachide|graine|chia|\blin\b|pistache|olive|tahini|pur[eé]e d.ol[eé]agineux/],
+];
+const guessCat = name => { const n = String(name || '').toLowerCase(); for (const [id, re] of CAT_RULES) if (re.test(n)) return id; return 'au'; };
+const catOf = f => f.cat || guessCat(f.name);
+const pick100 = f => ({ ...(f.cat ? { cat: f.cat } : {}), name: f.name, brand: f.brand || '', kcal100: f.kcal100, p100: f.p100 || 0, c100: f.c100 || 0, f100: f.f100 || 0, barcode: f.barcode || '', serving: f.serving || null, source: f.source || '' });
 
 /* ---------- Modifier / supprimer une ligne ---------- */
 // Un aliment noté → « aliment » réutilisable (valeurs pour 100 g ; sans grammes : 1 portion = 100 g).
@@ -1222,8 +1283,8 @@ const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 let BASE = null;
 function loadBase() {
   if (BASE) return Promise.resolve(BASE);
-  return fetch('aliments.json').then(r => r.json()).then(rows => (BASE = rows.map(([name, syn, kcal, p, c, f]) => ({
-    name, brand: '', kcal100: kcal, p100: p, c100: c, f100: f, source: 'search', _n: norm(name + ' ' + syn), _h: norm(name.split(',')[0]),
+  return fetch('aliments.json').then(r => r.json()).then(rows => (BASE = rows.map(([name, syn, kcal, p, c, f, cat]) => ({
+    name, brand: '', kcal100: kcal, p100: p, c100: c, f100: f, cat: cat || undefined, source: 'search', _n: norm(name + ' ' + syn), _h: norm(name.split(',')[0]),
   })))).catch(() => (BASE = []));
 }
 function searchBase(words) {

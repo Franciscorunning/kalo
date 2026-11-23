@@ -368,3 +368,13 @@ table.mt { font-size: 13.5px; }
 .wt-tip span { color: #c4b5fd !important; }
 .fav-dot { color: #f5b301; }
 .sheet.kb { border-radius: 22px 22px 0 0; padding-bottom: 12px; transition: bottom .15s ease, max-height .15s ease; }
+
+/* v9 : favoris rangés */
+.fav-search { margin: 4px 0 2px; }
+.fav-cat { margin-top: 12px; }
+.fav-cat summary { list-style: none; cursor: pointer; font-weight: 700; font-size: 15px; padding: 6px 4px 8px; display: flex; align-items: center; gap: 6px; }
+.fav-cat summary::-webkit-details-marker { display: none; }
+.fav-cat summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 20px; transition: transform .2s; }
+.fav-cat[open] summary::after { transform: rotate(90deg); }
+.cat-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.cat-sel { flex: 1; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: 14px; }
