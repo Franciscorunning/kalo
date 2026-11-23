@@ -360,3 +360,10 @@ table.mt { font-size: 13.5px; }
 
 .pw-box { background: var(--card2); border-radius: 14px; padding: 12px; margin-top: 12px; }
 .pw-box .input { background: var(--card); }
+
+/* v8 : infobulle de la courbe, étoile */
+.wt-card { position: relative; }
+.wt-svg { touch-action: pan-y; cursor: crosshair; }
+.wt-tip { position: absolute; z-index: 2; background: var(--accent); color: var(--on-accent); font-size: 12.5px; line-height: 1.35; padding: 6px 10px; border-radius: 10px; pointer-events: none; white-space: nowrap; transform: translateY(-100%); box-shadow: 0 4px 14px rgba(0,0,0,.2); }
+.wt-tip span { color: #c4b5fd !important; }
+.fav-dot { color: #f5b301; }

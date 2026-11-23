@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '23';
+const APP_VERSION = '24';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -470,7 +470,7 @@ function renderDay(app) {
         ${prevEs.length ? `<button class="sameas" data-sameas="${m.id}">↺ Comme la veille <span class="muted">· ${prevEs.length} aliment${prevEs.length > 1 ? 's' : ''} · ${fmt(totals(prevEs).kcal)} kcal</span></button>` : ''}
         ${isOpen ? es.map(e => `<div class="swipe" data-swipe="${e.id}"><button class="swipe-del" data-del="${e.id}">Supprimer</button><button class="entry" data-entry="${e.id}">
             <span class="thumb">${e.img ? `<img class="thumb" src="${e.img}" alt="">` : srcEmoji(e.source)}</span>
-            <span class="info"><span class="n">${esc(e.name)}</span>
+            <span class="info"><span class="n">${isFavEntry(e) ? '<span class="fav-dot">★</span> ' : ''}${esc(e.name)}</span>
               <span class="m num">${e.grams ? fmt(e.grams) + ' g · ' : ''}<span><i class="dot" style="background:var(--prot)"></i>${fmt(e.p)}</span><span><i class="dot" style="background:var(--carb)"></i>${fmt(e.c)}</span><span><i class="dot" style="background:var(--fat)"></i>${fmt(e.f)}</span></span></span>
             <span class="kc num">${fmt(e.kcal)}</span></button></div>`).join('') : ''}
       </div>`;
@@ -1052,7 +1052,9 @@ function openFood(f, source, opts = {}) {
         <div><b class="num" style="color:var(--fat)">${fmt(f.f100 * k)}</b><small>lip. g</small></div>`;
     };
     g.oninput = upd; upd();
-    setTimeout(() => { g.focus(); try { g.select(); } catch {} }, 280);
+    g.focus({ preventScroll: true });
+    try { g.setSelectionRange(0, g.value.length); } catch {}
+    setTimeout(() => { if (document.activeElement === g) { try { g.setSelectionRange(0, g.value.length); } catch {} } }, 300);
     $$('[data-g]', sh).forEach(b => b.onclick = () => { g.value = b.dataset.g; upd(); });
     $('#f-add', sh).onclick = () => {
       const q = num(g.value); if (!q) return toast('Indique une quantité');
@@ -1069,12 +1071,21 @@ function openFood(f, source, opts = {}) {
 const pick100 = f => ({ name: f.name, brand: f.brand || '', kcal100: f.kcal100, p100: f.p100 || 0, c100: f.c100 || 0, f100: f.f100 || 0, barcode: f.barcode || '', serving: f.serving || null, source: f.source || '' });
 
 /* ---------- Modifier / supprimer une ligne ---------- */
+// Un aliment noté → « aliment » réutilisable (valeurs pour 100 g ; sans grammes : 1 portion = 100 g).
+function foodFromEntry(e) {
+  if (e.per100) return { ...e.per100, name: e.name };
+  if (e.grams) { const r = 100 / e.grams; return { name: e.name, kcal100: r0(e.kcal * r), p100: r1(e.p * r), c100: r1(e.c * r), f100: r1(e.f * r), source: e.source }; }
+  return { name: e.name + ' (portion)', kcal100: r0(e.kcal), p100: r1(e.p), c100: r1(e.c), f100: r1(e.f), serving: 100, source: e.source };
+}
+const isFavEntry = e => !!S.foods[foodKey(foodFromEntry(e))]?.fav;
 function openEntry(id) {
   const k = UI.date, d = S.days[k], e = d?.entries.find(x => x.id === id);
   if (!e) return;
   const scalable = e.grams && e.per100;
+  const fav = isFavEntry(e);
   openSheet(`
-    <h2 style="margin-bottom:4px">${esc(e.name)}</h2>
+    <div class="food-head"><h2 style="margin-bottom:4px">${esc(e.name)}</h2>
+      <button class="star ${fav ? 'on' : ''}" id="e-star" aria-label="Favori">${fav ? '★' : '☆'}</button></div>
     <p class="muted small" style="margin:0 0 14px">${srcEmoji(e.source)} ${({ photo: 'Photo analysée par l\'IA', barcode: 'Code-barres', ai: 'Estimé par l\'IA', manual: 'Saisie manuelle', search: 'Base d\'aliments' })[e.source] || ''}</p>
     ${e.img ? `<img class="photo-prev" src="${e.img}" alt="">` : ''}
     <p class="muted small" style="margin:0 4px 6px">Repas (pour le déplacer, choisis-en un autre)</p>
@@ -1091,6 +1102,11 @@ function openEntry(id) {
     <button class="btn danger" id="e-del">Supprimer</button>`, sh => {
     let meal = e.meal;
     bindMealChips(sh, m => (meal = m));
+    $('#e-star', sh).onclick = () => {
+      const on = toggleFavFood(foodFromEntry(e)), b = $('#e-star', sh);
+      b.classList.toggle('on', on); b.textContent = on ? '★' : '☆'; render();
+      toast(on ? 'Ajouté aux aliments favoris ⭐' : 'Retiré des favoris');
+    };
     if (scalable) $('#e-g', sh).oninput = ev => {
       const q = num(ev.target.value) || 0, r = q / 100, p = e.per100;
       $('#e-k', sh).value = r0(p.kcal100 * r); $('#e-p', sh).value = fmt(p.p100 * r);
@@ -1713,6 +1729,31 @@ function weightSeries(rangeDays) {
   const today = todayKey(), from = rangeDays ? addDays(today, -rangeDays) : '0000';
   return Object.keys(S.days).filter(k => k <= today && k >= from && S.days[k].weight != null).sort().map(k => ({ k, w: S.days[k].weight }));
 }
+let WT_POINTS = [], WT_BOX = null;
+function bindWeightHover(root) {
+  const svg = $('.wt-svg', root); if (!svg || !WT_POINTS.length) return;
+  const g = $('#wt-hover', svg), tip = $('#wt-tip', root), card = $('.wt-card', root);
+  const show = clientX => {
+    const r = svg.getBoundingClientRect(), sx = (clientX - r.left) / r.width * WT_BOX.W;
+    let best = WT_POINTS[0]; for (const p of WT_POINTS) if (Math.abs(p.x - sx) < Math.abs(best.x - sx)) best = p;
+    g.style.display = '';
+    $('#wt-hl', svg).setAttribute('x1', best.x); $('#wt-hl', svg).setAttribute('x2', best.x);
+    $('#wt-hp', svg).setAttribute('cx', best.x); $('#wt-hp', svg).setAttribute('cy', best.y);
+    $('#wt-ha', svg).setAttribute('cx', best.x); $('#wt-ha', svg).setAttribute('cy', best.ya);
+    const d = dateOf(best.k);
+    tip.innerHTML = `<b>${fmt(best.w, 1)} kg</b> · ${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}<br><span style="color:#8b5cf6">moy. 7 j : ${fmt(best.avg, 1)} kg</span>`;
+    tip.hidden = false;
+    const cr = card.getBoundingClientRect(), px = r.left - cr.left + best.x / WT_BOX.W * r.width;
+    const tw = tip.offsetWidth; tip.style.left = Math.max(8, Math.min(cr.width - tw - 8, px - tw / 2)) + 'px';
+    tip.style.top = (r.top - cr.top - 6) + 'px';
+  };
+  const hide = () => { g.style.display = 'none'; tip.hidden = true; };
+  svg.addEventListener('pointermove', e => show(e.clientX));
+  svg.addEventListener('pointerdown', e => show(e.clientX));
+  svg.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hide(); });
+  svg.addEventListener('touchmove', e => { if (e.touches[0]) show(e.touches[0].clientX); }, { passive: true });
+  document.addEventListener('pointerdown', e => { if (!svg.contains(e.target)) hide(); }, { once: true });
+}
 function weightCard() {
   const pts = weightSeries(UI.statRange);
   const ranges = [[90, '3 mois'], [180, '6 mois'], [0, 'Tout']];
@@ -1730,7 +1771,9 @@ function weightCard() {
   const first = pts[0].w, last = pts[pts.length - 1].w, pct = (last - first) / first * 100;
   const goal = S.profile.goal, good = goal === 'lose' ? pct < 0 : goal === 'gain' ? pct > 0 : Math.abs(pct) <= 1;
   const ticks = [0, 0.5, 1].map(f => pts[Math.min(pts.length - 1, Math.round(f * (pts.length - 1)))].k);
-  return `<div class="card">
+  WT_POINTS = pts.map((p, i) => ({ k: p.k, w: p.w, avg: sm[i].w, x: x(p.k), y: y(p.w), ya: y(sm[i].w) }));
+  WT_BOX = { W, H, top: py };
+  return `<div class="card wt-card">
     <div class="wt-head"><div><div class="muted small">Poids actuel</div><div class="wt-now num">${fmt(last, 1)}<small> kg</small></div></div>
       <span class="delta ${Math.abs(pct) < 0.05 ? 'neutral' : good ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 2)} %</span></div>
     ${chips}
@@ -1739,8 +1782,14 @@ function weightCard() {
       <path d="${path}" fill="none" stroke="var(--muted)" stroke-width="1.2" opacity=".55"/>
       <path d="${smPath}" fill="none" stroke="#8b5cf6" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
       ${ticks.map((k, i) => `<text class="axis" x="${x(k)}" y="${H + 14}" text-anchor="${i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}">${dateOf(k).getDate()} ${MON[dateOf(k).getMonth()]}</text>`).join('')}
+      <g id="wt-hover" style="display:none">
+        <line id="wt-hl" y1="${py}" y2="${H}" stroke="var(--text)" stroke-width="1" stroke-dasharray="2 3" opacity=".5"/>
+        <circle id="wt-hp" r="4.5" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/>
+        <circle id="wt-ha" r="4.5" fill="#8b5cf6" stroke="var(--card)" stroke-width="2"/>
+      </g>
     </svg>
-    <p class="muted small" style="margin:4px 0 0">Trait violet = moyenne sur 7 jours. Gris = pesées du jour.</p>
+    <div class="wt-tip" id="wt-tip" hidden></div>
+    <p class="muted small" style="margin:4px 0 0">Trait violet = moyenne sur 7 jours. Gris = pesées du jour. Glisse le doigt (ou la souris) sur la courbe pour voir le poids d'un jour.</p>
   </div>`;
 }
 function averagesCard() {
@@ -1804,6 +1853,7 @@ function renderStats(app) {
   $$('[data-mode]', app).forEach(b => b.onclick = () => { UI.statMode = b.dataset.mode; UI.statLimit = 31; render(); });
   if ($('#st-more')) $('#st-more').onclick = () => { UI.statLimit += 60; render(); };
   $('#st-csv').onclick = exportCSV;
+  bindWeightHover(app);
 }
 async function exportCSV() {
   const rows = Object.keys(S.days).sort().map(k => {
