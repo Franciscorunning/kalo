@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '24';
+const APP_VERSION = '25';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -262,7 +262,28 @@ const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isN
 document.addEventListener('focusin', e => {
   const t = e.target;
   if (t.matches?.('input.num, input.g')) setTimeout(() => { try { t.select(); t.setSelectionRange(0, t.value.length); } catch {} }, 0);
+  if (t.closest?.('.sheet')) { fitSheetToKeyboard(); setTimeout(() => showFieldInSheet(t), 350); }
 });
+// Clavier du téléphone : la fenêtre du bas remonte au-dessus du clavier, et le champ touché reste visible.
+function fitSheetToKeyboard() {
+  const sh = document.querySelector('#sheet-root .sheet'), vv = window.visualViewport;
+  if (!sh || !vv) return;
+  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  sh.style.bottom = kb > 60 ? kb + 'px' : '';
+  sh.style.maxHeight = kb > 60 ? (vv.height - 12) + 'px' : '';
+  sh.classList.toggle('kb', kb > 60);
+}
+function showFieldInSheet(t) {
+  const sh = t.closest('.sheet'); if (!sh || document.activeElement !== t) return;
+  const r = t.getBoundingClientRect(), sr = sh.getBoundingClientRect();
+  if (r.top < sr.top + 50 || r.bottom > sr.bottom - 16) sh.scrollTop += (r.top - sr.top) - sr.height / 3;
+}
+if (window.visualViewport) {
+  const refit = () => { fitSheetToKeyboard(); const a = document.activeElement; if (a && a.closest?.('.sheet')) showFieldInSheet(a); };
+  window.visualViewport.addEventListener('resize', refit);
+  window.visualViewport.addEventListener('scroll', fitSheetToKeyboard);
+}
+document.addEventListener('focusout', () => setTimeout(fitSheetToKeyboard, 120));
 let toastT;
 function toast(msg, action, onAction) {
   const t = $('#toast');

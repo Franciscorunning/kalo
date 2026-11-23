@@ -367,3 +367,4 @@ table.mt { font-size: 13.5px; }
 .wt-tip { position: absolute; z-index: 2; background: var(--accent); color: var(--on-accent); font-size: 12.5px; line-height: 1.35; padding: 6px 10px; border-radius: 10px; pointer-events: none; white-space: nowrap; transform: translateY(-100%); box-shadow: 0 4px 14px rgba(0,0,0,.2); }
 .wt-tip span { color: #c4b5fd !important; }
 .fav-dot { color: #f5b301; }
+.sheet.kb { border-radius: 22px 22px 0 0; padding-bottom: 12px; transition: bottom .15s ease, max-height .15s ease; }
