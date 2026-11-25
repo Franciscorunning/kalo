@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '28';
+const APP_VERSION = '29';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -666,8 +666,8 @@ function favFoodsHTML() {
   for (const c of CATS) {
     const items = all.filter(f => catOf(f) === c.id).sort(byName);
     if (!items.length) continue;
-    const closed = UI.favClosed?.has(c.id) && !words.length;
-    h += `<details class="fav-cat" data-cat="${c.id}" ${closed ? '' : 'open'}><summary>${c.e} ${c.t} <span class="muted">· ${items.length}</span></summary>
+    const open = words.length || UI.favOpen?.has(c.id);
+    h += `<details class="fav-cat" data-cat="${c.id}" ${open ? 'open' : ''}><summary>${c.e} ${c.t} <span class="muted">· ${items.length}</span></summary>
       <div class="list">${items.map(f => foodLi(f, 'favfood:' + f.key)).join('')}</div></details>`;
   }
   return h;
@@ -675,7 +675,8 @@ function favFoodsHTML() {
 function bindFavFoods(root, getTarget) {
   $('#fav-foods', root).innerHTML = favFoodsHTML();
   $$('.fav-cat', root).forEach(d => d.addEventListener('toggle', () => {
-    UI.favClosed = UI.favClosed || new Set(); d.open ? UI.favClosed.delete(d.dataset.cat) : UI.favClosed.add(d.dataset.cat);
+    if (norm(favQ.q).trim()) return;
+    UI.favOpen = UI.favOpen || new Set(); d.open ? UI.favOpen.add(d.dataset.cat) : UI.favOpen.delete(d.dataset.cat);
   }));
   $$('[data-pick^="favfood:"]', root).forEach(b => b.onclick = () => {
     const f = S.foods[b.dataset.pick.slice(8)];
@@ -686,6 +687,7 @@ function bindFavFoods(root, getTarget) {
 // fixedMeal : ouvert depuis un repas précis. Sinon chaque favori va dans son repas habituel (sauf choix contraire).
 function openFavs(fixedMeal, inPage) {
   let target = fixedMeal || '';
+  favQ.q = '';
   const draw = sh => {
     const qInp = $('#fav-q', sh);
     if (qInp && !qInp.dataset.bound) {
@@ -1025,7 +1027,7 @@ function openAdd(meal) {
     $('#c-barcode', sh).onclick = openBarcode;
     $('#c-search', sh).onclick = () => openSearch();
     $('#c-body', sh).onclick = () => openBody();
-    $('#c-favs', sh).onclick = () => openFavs();
+    $('#c-favs', sh).onclick = () => openFavs(UI.meal);
   });
 }
 
@@ -1145,31 +1147,42 @@ function openFood(f, source, opts = {}) {
 }
 /* ---------- Catégories d'aliments (pour ranger les favoris) ---------- */
 const CATS = [
-  { id: 'fl', e: '🍎', t: 'Fruits et légumes' },
+  { id: 'fr', e: '🍎', t: 'Fruits' },
+  { id: 'le', e: '🥦', t: 'Légumes' },
   { id: 'fe', e: '🍞', t: 'Pains, céréales et féculents' },
   { id: 'pr', e: '🍗', t: 'Viande, poisson, œufs, tofu' },
   { id: 'la', e: '🥛', t: 'Produits laitiers' },
-  { id: 'gr', e: '🥜', t: 'Noix, graines, huiles' },
-  { id: 'su', e: '🍫', t: 'Sucré et snacks' },
+  { id: 'ol', e: '🥜', t: 'Oléagineux' },
+  { id: 'su', e: '🍫', t: 'Snacks et desserts' },
+  { id: 'sa', e: '🥫', t: 'Sauces' },
   { id: 'bo', e: '🥤', t: 'Boissons' },
   { id: 'sp', e: '💪', t: 'Sport et compléments' },
-  { id: 'pl', e: '🍲', t: 'Plats' },
   { id: 'au', e: '🍽️', t: 'Autres' },
 ];
 // Devine la catégorie à partir du nom (pour les produits de marque, l'IA, la saisie manuelle).
 const CAT_RULES = [
   ['sp', /whey|prot[eé]in|isolat|\bgel\b|isostar|sponser|maurten|[eé]lectrolyt|recovery|bcaa|cr[eé]atine|shaker/],
   ['bo', /caf[eé]|\bth[eé]\b|\bjus\b|soda|coca|bi[eè]re|\bvin\b|\beau\b|boisson|smoothie|limonade|kombucha|ice ?tea|cappuccino|latte/],
-  ['pl', /pizza|burger|lasagne|curry|risotto|soupe|sandwich|quiche|gratin|bowl|\bplat\b|sushi|kebab|taco|bolo|r[oö]sti|fondue|raclette|wok|paella/],
+  ['sa', /sauce|vinaigrette|ketchup|mayo|moutarde|pesto|dressing|bouillon|harissa|sriracha|tabasco|aioli|a[iï]oli|houmous|hummus|guacamole/],
   ['la', /\blait\b|yogo?u?rt|yaourt|fromage|skyr|quark|s[eé]r[eé]|cr[eè]me|beurre(?! de)|mozzarella|gruy|emmental|f[eé]ta|parmesan|cottage|k[eé]fir|ricotta/],
   ['pr', /poulet|b[oœ]e?uf|porc|veau|agneau|jambon|dinde|saumon|thon|poisson|crevette|[oœ]e?uf|tofu|steak|viande|saucisse|lard|bacon|salami|cabillaud|truite|seitan|tempeh|merguez|cervelas/],
-  ['su', /chocolat|biscuit|g[aâ]teau|cookie|bonbon|glace|sucre|confiture|\bmiel\b|nutella|ovomaltine|barre|chips|croissant|tarte|cr[eê]pe|gaufre|p[aâ]tisserie|caramel|sirop|brownie|muffin|donut/],
+  ['su', /chocolat|biscuit|g[aâ]teau|cookie|bonbon|glace|sucre|confiture|\bmiel\b|nutella|ovomaltine|barre|chips|croissant|tarte|cr[eê]pe|gaufre|p[aâ]tisserie|caramel|sirop|brownie|muffin|donut|dessert|mousse|pudding|flan|tiramisu|cake|snack|bretzel|cacahu[eè]tes? sal/],
   ['fe', /pain|\briz\b|p[aâ]tes?\b|spaghet|nouille|quinoa|semoule|couscous|flocon|avoine|m[uü]e?sli|granola|c[eé]r[eé]ale|pomme de terre|patate|tortilla|wrap|cracker|galette|biscotte|lentille|pois chiche|haricot(?! vert)|polenta|boulgour/],
-  ['fl', /pomme|banane|orange|fraise|framboise|myrtille|raisin|poire|kiwi|mangue|ananas|abricot|p[eê]che|cerise|citron|melon|past[eè]que|tomate|carotte|salade|courgette|brocoli|\bchou|[eé]pinard|poivron|concombre|oignon|champignon|haricot vert|l[eé]gume|fruit|avocat|betterave|poireau|petits pois|ma[iï]s/],
-  ['gr', /huile|noix|amande|noisette|cajou|cacahu|arachide|graine|chia|\blin\b|pistache|olive|tahini|pur[eé]e d.ol[eé]agineux/],
+  ['fr', /pomme|banane|orange|fraise|framboise|myrtille|raisin|poire(?!au)|kiwi|mangue|ananas|abricot|p[eê]che|cerise|citron|melon|past[eè]que|fruit|avocat|datte|figue|prune|mandarine|cl[eé]mentine|grenade|litchi|papaye|nectarine|compote|baie|cassis|groseille|rhubarbe/],
+  ['le', /tomate|carotte|salade|courgette|brocoli|\bchou|[eé]pinard|poivron|concombre|oignon|champignon|haricot vert|l[eé]gume|betterave|poireau|petits? pois|ma[iï]s|aubergine|asperge|c[eé]leri|courge|potiron|radis|fenouil|endive|laitue|roquette|ail\b|patate douce/],
+  ['ol', /huile|noix|amande|noisette|cajou|cacahu|arachide|graine|chia|\blin\b|pistache|olive|tahini|ol[eé]agineux|s[eé]same|tournesol|coco/],
 ];
 const guessCat = name => { const n = String(name || '').toLowerCase(); for (const [id, re] of CAT_RULES) if (re.test(n)) return id; return 'au'; };
-const catOf = f => f.cat || guessCat(f.name);
+// Anciennes catégories (avant v29) → nouvelles, sans rien perdre.
+const catOf = f => {
+  const c = f.cat;
+  if (!c) return guessCat(f.name);
+  if (c === 'pl') { const g = guessCat(f.name); return g === 'fr' || g === 'le' ? 'au' : g; }
+  if (c === 'au') { const g = guessCat(f.name); return g === 'sa' ? g : c; }
+  if (c === 'gr') { const g = guessCat(f.name); return g === 'sa' || g === 'la' ? g : 'ol'; }
+  if (c === 'fl') { const g = guessCat(f.name); return g === 'fr' || g === 'le' ? g : 'le'; }
+  return c;
+};
 const pick100 = f => ({ ...(f.cat ? { cat: f.cat } : {}), name: f.name, brand: f.brand || '', kcal100: f.kcal100, p100: f.p100 || 0, c100: f.c100 || 0, f100: f.f100 || 0, barcode: f.barcode || '', serving: f.serving || null, source: f.source || '' });
 
 /* ---------- Modifier / supprimer une ligne ---------- */
