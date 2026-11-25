@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '27';
+const APP_VERSION = '28';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -91,11 +91,21 @@ function mergeDocs(L, R, remoteSettingsWin) {
   };
 }
 // Appel au relais avec 3 essais : une coupure passagère (réseau, adresse introuvable un instant) ne bloque plus.
+// Deux adresses pour le même relais : si un réseau bloque l'une, on passe par l'autre (et on retient celle qui marche).
+const RELAY_HOSTS = [RELAY_URL, 'https://kalo-relais.pages.dev'];
 async function relayFetch(path, opts = {}) {
-  let last;
+  let last, pref = 0;
+  try { pref = Math.max(0, RELAY_HOSTS.indexOf(localStorage.getItem('kalo-relay-host'))); } catch {}
+  const order = [RELAY_HOSTS[pref], ...RELAY_HOSTS.filter((_, i) => i !== pref)];
   for (let i = 0; i < 3; i++) {
-    try { return await fetch(RELAY_URL + path, opts); }
-    catch (e) { last = e; await new Promise(r => setTimeout(r, 800 * (i + 1) * (i + 1))); }
+    for (const h of order) {
+      try {
+        const r = await fetch(h + path, opts);
+        try { localStorage.setItem('kalo-relay-host', h); } catch {}
+        return r;
+      } catch (e) { last = e; }
+    }
+    if (i < 2) await new Promise(r => setTimeout(r, 800 * (i + 1) * (i + 1)));
   }
   throw Object.assign(new Error('net'), { cause: last });
 }
