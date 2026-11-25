@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '26';
+const APP_VERSION = '27';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -90,6 +90,16 @@ function mergeDocs(L, R, remoteSettingsWin) {
     setU: Math.max(L.setU || 0, R.setU || 0),
   };
 }
+// Appel au relais avec 3 essais : une coupure passagère (réseau, adresse introuvable un instant) ne bloque plus.
+async function relayFetch(path, opts = {}) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return await fetch(RELAY_URL + path, opts); }
+    catch (e) { last = e; await new Promise(r => setTimeout(r, 800 * (i + 1) * (i + 1))); }
+  }
+  throw Object.assign(new Error('net'), { cause: last });
+}
+const isNetErr = e => !e || e.message === 'net' || /fetch|load failed|network|internet/i.test(e.message || '');
 /* ---------- Connexion (code Kalo) et déconnexion ---------- */
 async function sha256(t) {
   const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
@@ -115,7 +125,7 @@ function bindLoginForm(root, id, onDone) {
     // 1) prénom + mot de passe simple ; 2) sinon, si ça ressemble à un code Kalo, on l'utilise tel quel
     let code = null, viaPw = false;
     try {
-      const lr = await fetch(`${RELAY_URL}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: who, password: pass }) });
+      const lr = await relayFetch(`/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: who, password: pass }) });
       if (lr.ok) { code = (await lr.json()).code; viaPw = true; }
       else if (lr.status === 429) { btn.disabled = false; btn.textContent = 'Se connecter'; return toast('Trop d\'essais : réessaie dans 15 minutes'); }
     } catch {}
@@ -137,7 +147,7 @@ async function loginWith(code, who) {
   // sans y mélanger ce qui a été tapé ici pour essayer (ex. le questionnaire refait sur l'ordi).
   else if (hasLocal && !S.linkedHash) {
     try {
-      const r = await fetch(`${RELAY_URL}/data`, { headers: { 'X-Kalo-Code': code }, cache: 'no-store' });
+      const r = await relayFetch(`/data`, { headers: { 'X-Kalo-Code': code }, cache: 'no-store' });
       if (r.ok && (await r.json()).doc?.profile) { const k = S.apiKey; S = freshState(); S.apiKey = k; }
     } catch {}
   }
@@ -174,7 +184,7 @@ async function cloudSync(silent) {
   syncBusy = true; clearTimeout(syncTimer);
   try {
     stamp();
-    const r = await fetch(`${RELAY_URL}/data`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
+    const r = await relayFetch(`/data`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
     if (r.status === 401) throw new Error('Code refusé : vérifie-le dans Profil.');
     if (!r.ok) throw new Error('net');
     const remote = (await r.json()).doc;
@@ -186,7 +196,7 @@ async function cloudSync(silent) {
     lastSnap = snapOf(S);
     const out = JSON.stringify(docOf(S));
     if (!remote || out !== JSON.stringify(remote)) {
-      const p = await fetch(`${RELAY_URL}/data`, { method: 'PUT', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ doc: docOf(S) }) });
+      const p = await relayFetch(`/data`, { method: 'PUT', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ doc: docOf(S) }) });
       if (!p.ok) throw new Error('net');
     }
     S.syncOnce = true; S.syncLast = Date.now(); S.syncErr = ''; rawSave();
@@ -195,7 +205,7 @@ async function cloudSync(silent) {
     if (!silent) toast('Sauvegardé en ligne ✓');
     return true;
   } catch (e) {
-    S.syncErr = e.message === 'net' || /fetch/i.test(e.message) ? 'Pas de connexion' : e.message; rawSave();
+    S.syncErr = isNetErr(e) ? 'Pas de connexion' : e.message; rawSave();
     if (!silent) toast(S.syncErr === 'Pas de connexion' ? 'Pas de connexion : la sauvegarde se fera plus tard.' : S.syncErr);
     return false;
   } finally {
@@ -847,7 +857,7 @@ async function garminSync(silent, days) {
   try {
     const full = (S.garminV || 0) < 2;
     const n = days || (full ? 366 : S.garminLast ? Math.min(60, Math.ceil((Date.now() - S.garminLast) / 864e5) + 2) : 30);
-    const r = await fetch(`${RELAY_URL}/garmin?days=${n}`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
+    const r = await relayFetch(`/garmin?days=${n}`, { headers: { 'X-Kalo-Code': S.garminCode }, cache: 'no-store' });
     if (r.status === 401) throw new Error('Code Garmin refusé : vérifie-le dans Profil.');
     if (!r.ok) throw new Error('Garmin ne répond pas pour l\'instant. Réessaie plus tard.');
     const data = await r.json();
@@ -866,7 +876,7 @@ async function garminSync(silent, days) {
   } catch (e) {
     garminBusy = false;
     if (btn && document.body.contains(btn)) { btn.disabled = false; btn.firstChild.textContent = '⌚ Récupérer pas et poids Garmin'; }
-    if (!silent) toast(e.message && !/fetch/i.test(e.message) ? e.message : 'Pas de connexion. Réessaie plus tard.');
+    if (!silent) toast(isNetErr(e) ? 'Le relais ne répond pas (connexion). Réessaie dans un moment.' : e.message);
   }
 }
 // Rappel de sauvegarde : dès 3 jours notés, puis toutes les semaines.
@@ -2164,7 +2174,7 @@ function renderProfile(app) {
     if (pass.length < 6) return toast('Au moins 6 caractères');
     const b = $('#pw-go'); b.disabled = true;
     try {
-      const r = await fetch(`${RELAY_URL}/password`, { method: 'POST', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password: pass }) });
+      const r = await relayFetch(`/password`, { method: 'POST', headers: { 'X-Kalo-Code': S.garminCode, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password: pass }) });
       const j = await r.json().catch(() => ({}));
       if (r.status === 409) return toast('Ce prénom est déjà pris : ajoute une initiale (ex. francisco-r)');
       if (!r.ok) return toast('Impossible pour l\'instant, réessaie');
