@@ -1,6 +1,6 @@
 // Kalo — suivi des calories, macros, poids et pas. Tout reste sur l'appareil.
 
-const APP_VERSION = '29';
+const APP_VERSION = '30';
 const RELAY_URL = 'https://kalo-relay.kalo-relay.workers.dev';
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 const MODEL = 'claude-opus-5-5';
@@ -1824,7 +1824,7 @@ function delta(metric, cur, prev) {
   let cls = 'neutral';
   if (Math.abs(pct) >= 0.05) {
     if (metric === 'steps') cls = pct > 0 ? 'good' : 'bad';
-    else if (metric === 'weight') cls = goal === 'lose' ? (pct < 0 ? 'good' : 'bad') : goal === 'gain' ? (pct > 0 ? 'good' : 'bad') : (Math.abs(pct) <= 0.5 ? 'good' : 'bad');
+    else if (metric === 'weight') cls = pct < 0 ? 'good' : 'bad';
     else if (metric === 'kcal') cls = Math.abs(cur - T) <= Math.abs(prev - T) ? 'good' : 'bad';
   }
   if (Math.abs(pct) < 0.05) return '<span class="delta neutral">= 0 %</span>';
@@ -1890,21 +1890,21 @@ function weightCard() {
   WT_BOX = { W, H, top: py };
   return `<div class="card wt-card">
     <div class="wt-head"><div><div class="muted small">Poids actuel</div><div class="wt-now num">${fmt(last, 1)}<small> kg</small></div></div>
-      <span class="delta ${Math.abs(pct) < 0.05 ? 'neutral' : good ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 2)} %</span></div>
+      <span class="delta ${Math.abs(pct) < 0.005 ? 'neutral' : pct < 0 ? 'good' : 'bad'}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : '= '}${fmt(pct, 2)} %</span></div>
     ${chips}
     <svg class="wt-svg" viewBox="0 0 ${W} ${H + 18}">
       ${[mx, (mx + mn) / 2, mn].map(v => `<line x1="${px}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-dasharray="3 4"/><text class="axis" x="0" y="${y(v) + 3}">${fmt(v, 1)}</text>`).join('')}
-      <path d="${path}" fill="none" stroke="var(--muted)" stroke-width="1.2" opacity=".55"/>
+      <path d="${path}" fill="none" stroke="#f97316" stroke-width="1.5" opacity=".9" stroke-linejoin="round"/>
       <path d="${smPath}" fill="none" stroke="#8b5cf6" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
       ${ticks.map((k, i) => `<text class="axis" x="${x(k)}" y="${H + 14}" text-anchor="${i === 0 ? 'start' : i === 2 ? 'end' : 'middle'}">${dateOf(k).getDate()} ${MON[dateOf(k).getMonth()]}</text>`).join('')}
       <g id="wt-hover" style="display:none">
         <line id="wt-hl" y1="${py}" y2="${H}" stroke="var(--text)" stroke-width="1" stroke-dasharray="2 3" opacity=".5"/>
-        <circle id="wt-hp" r="4.5" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/>
+        <circle id="wt-hp" r="4.5" fill="var(--card)" stroke="#f97316" stroke-width="2"/>
         <circle id="wt-ha" r="4.5" fill="#8b5cf6" stroke="var(--card)" stroke-width="2"/>
       </g>
     </svg>
     <div class="wt-tip" id="wt-tip" hidden></div>
-    <p class="muted small" style="margin:4px 0 0">Trait violet = moyenne sur 7 jours. Gris = pesées du jour. Glisse le doigt (ou la souris) sur la courbe pour voir le poids d'un jour.</p>
+    <p class="muted small" style="margin:4px 0 0">Trait violet = moyenne sur 7 jours. Orange = pesées du jour. Glisse le doigt (ou la souris) sur la courbe pour voir le poids d'un jour.</p>
   </div>`;
 }
 function averagesCard() {
@@ -1925,10 +1925,12 @@ function averagesCard() {
 }
 function cls(metric, cur, prev) {
   if (cur == null || prev == null || !prev) return '';
-  const pct = (cur - prev) / prev * 100; if (Math.abs(pct) < 0.05) return '';
+  const pct = (cur - prev) / prev * 100;
+  // Poids : baisse = vert, hausse = rouge, 0,00 % = gris
+  if (metric === 'weight') return Math.abs(pct) < 0.005 ? '' : pct < 0 ? 'good' : 'bad';
+  if (Math.abs(pct) < 0.05) return '';
   const goal = S.profile.goal, T = S.profile.targets.kcal;
   if (metric === 'steps') return pct > 0 ? 'good' : 'bad';
-  if (metric === 'weight') return goal === 'lose' ? (pct < 0 ? 'good' : 'bad') : goal === 'gain' ? (pct > 0 ? 'good' : 'bad') : (Math.abs(pct) <= 0.5 ? 'good' : 'bad');
   return Math.abs(cur - T) <= Math.abs(prev - T) ? 'good' : 'bad';
 }
 const pctTxt = (cur, prev) => (cur == null || prev == null || !prev) ? '' : (() => { const p = (cur - prev) / prev * 100; return Math.abs(p) < 0.005 ? '= 0,00 %' : (p > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(p), 2) + ' %'; })();
@@ -1954,7 +1956,7 @@ function metricsTable() {
   return `<table class="mt"><thead><tr><th>${mode === 'semaine' ? 'Sem. du' : 'Mois'}</th><th class="c-st">Pas</th><th class="c-kc">Kcal</th><th class="c-bal">Bilan</th><th class="c-kg">Kg</th></tr></thead><tbody>
     ${list.map(p => `<tr>${'<td>' + lab(p) + '</td>'}${plain(p.steps, 0)}${plain(p.kcal, 0)}${balCell(p.bal)}${wcell(p.weight, p.prev?.weight)}</tr>`).join('')}
     </tbody></table>
-    <p class="legend" style="margin-top:8px">Moyennes par jour. Bilan = calories mangées − dépensées (Garmin). Le % du poids compare ${mode === 'semaine' ? 'à la semaine' : 'au mois'} d'avant : vert = dans le sens de ton objectif.</p>`;
+    <p class="legend" style="margin-top:8px">Moyennes par jour. Bilan = calories mangées − dépensées (Garmin). Le % du poids compare ${mode === 'semaine' ? 'à la semaine' : 'au mois'} d'avant : poids : vert = baisse, rouge = hausse, gris = stable.</p>`;
 }
 function renderStats(app) {
   app.innerHTML = `
